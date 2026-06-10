@@ -83,10 +83,10 @@ index 0000000..74d991b
 +}
 diff --git a/v2rayN/ServiceLib/Plugins/V2rayNPluginManager.cs b/v2rayN/ServiceLib/Plugins/V2rayNPluginManager.cs
 new file mode 100644
-index 0000000..a25b2a9
+index 0000000..1387a63
 --- /dev/null
 +++ b/v2rayN/ServiceLib/Plugins/V2rayNPluginManager.cs
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,193 @@
 +namespace ServiceLib.Plugins;
 +
 +public sealed class V2rayNPluginManager
@@ -109,11 +109,11 @@ index 0000000..a25b2a9
 +
 +    public async Task Reload(Config config)
 +    {
-+        await _reloadSemaphore.WaitAsync();
++        await _reloadSemaphore.WaitAsync().ConfigureAwait(false);
 +        try
 +        {
-+            await StopAllInternal();
-+            await LoadAll(config);
++            await StopAllInternal().ConfigureAwait(false);
++            await LoadAll(config).ConfigureAwait(false);
 +        }
 +        finally
 +        {
@@ -123,10 +123,10 @@ index 0000000..a25b2a9
 +
 +    public async Task StopAll()
 +    {
-+        await _reloadSemaphore.WaitAsync();
++        await _reloadSemaphore.WaitAsync().ConfigureAwait(false);
 +        try
 +        {
-+            await StopAllInternal();
++            await StopAllInternal().ConfigureAwait(false);
 +        }
 +        finally
 +        {
@@ -139,9 +139,10 @@ index 0000000..a25b2a9
 +        var pluginDir = Path.Combine(Utils.StartupPath(), "guiPlugins");
 +        Directory.CreateDirectory(pluginDir);
 +
-+        foreach (var pluginPath in Directory.EnumerateFiles(pluginDir, "*.dll", SearchOption.TopDirectoryOnly))
++        foreach (var pluginPath in Directory.EnumerateFiles(pluginDir, "*.dll", SearchOption.TopDirectoryOnly)
++                     .Where(IsPluginCandidate))
 +        {
-+            await LoadOne(config, pluginPath);
++            await LoadOne(config, pluginPath).ConfigureAwait(false);
 +        }
 +    }
 +
@@ -152,7 +153,7 @@ index 0000000..a25b2a9
 +        try
 +        {
 +            var assembly = loadContext.LoadFromAssemblyPath(shadowPath);
-+            var pluginTypes = assembly.GetTypes()
++            var pluginTypes = GetLoadableTypes(assembly)
 +                .Where(t => typeof(IV2rayNPlugin).IsAssignableFrom(t)
 +                            && t is { IsAbstract: false, IsInterface: false }
 +                            && t.GetConstructor(Type.EmptyTypes) is not null)
@@ -167,7 +168,7 @@ index 0000000..a25b2a9
 +            {
 +                var plugin = (IV2rayNPlugin)Activator.CreateInstance(pluginType);
 +                var cancellation = new CancellationTokenSource();
-+                await plugin.Start(new V2rayNPluginContext(config), cancellation.Token);
++                await plugin.Start(new V2rayNPluginContext(config), cancellation.Token).ConfigureAwait(false);
 +                _plugins.Add(new LoadedPlugin
 +                {
 +                    Path = pluginPath,
@@ -183,6 +184,29 @@ index 0000000..a25b2a9
 +        {
 +            Logging.SaveLog($"{_tag}: failed to load {pluginPath}", ex);
 +            loadContext.Unload();
++        }
++    }
++
++    private static bool IsPluginCandidate(string pluginPath)
++    {
++        var fileName = Path.GetFileName(pluginPath);
++        return fileName.EndsWith("Plugin.dll", StringComparison.OrdinalIgnoreCase);
++    }
++
++    private static IEnumerable<Type> GetLoadableTypes(Assembly assembly)
++    {
++        try
++        {
++            return assembly.GetTypes();
++        }
++        catch (ReflectionTypeLoadException ex)
++        {
++            foreach (var loaderException in ex.LoaderExceptions.Where(t => t is not null))
++            {
++                Logging.SaveLog($"{_tag}: failed to inspect {assembly.FullName}", loaderException!);
++            }
++
++            return ex.Types.OfType<Type>();
 +        }
 +    }
 +
@@ -219,8 +243,8 @@ index 0000000..a25b2a9
 +            try
 +            {
 +                loaded.Cancellation.Cancel();
-+                await loaded.Plugin.Stop();
-+                await loaded.Plugin.DisposeAsync();
++                await loaded.Plugin.Stop().ConfigureAwait(false);
++                await loaded.Plugin.DisposeAsync().ConfigureAwait(false);
 +            }
 +            catch (Exception ex)
 +            {
@@ -257,26 +281,47 @@ index 0000000..a25b2a9
 +    }
 +}
 diff --git a/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs b/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs
-index 53ad06c..f16b42b 100644
+index 53ad06c..beef344 100644
 --- a/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs
 +++ b/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs
-@@ -236,6 +236,11 @@ public class MainWindowViewModel : MyReactiveObject
+@@ -236,6 +236,10 @@ public class MainWindowViewModel : MyReactiveObject
              .ObserveOn(RxSchedulers.MainThreadScheduler)
              .Subscribe(async _ => await Reload());
  
 +        AppEvents.PluginsReloadRequested
 +            .AsObservable()
-+            .ObserveOn(RxSchedulers.MainThreadScheduler)
-+            .Subscribe(async _ => await V2rayNPluginManager.Instance.Reload(_config));
++            .Subscribe(_ => QueuePluginReload());
 +
          AppEvents.AddServerViaScanRequested
              .AsObservable()
              .ObserveOn(RxSchedulers.MainThreadScheduler)
-@@ -265,6 +270,7 @@ public class MainWindowViewModel : MyReactiveObject
+@@ -265,6 +269,7 @@ public class MainWindowViewModel : MyReactiveObject
          await ConfigHandler.InitBuiltinFullConfigTemplate(_config);
          await ProfileExManager.Instance.Init();
          await CoreManager.Instance.Init(_config, UpdateHandler);
-+        await V2rayNPluginManager.Instance.Reload(_config);
++        QueuePluginReload();
          TaskManager.Instance.RegUpdateTask(_config, UpdateTaskHandler);
  
          if (_config.GuiItem.EnableStatistics || _config.GuiItem.DisplayRealTimeSpeed)
+@@ -308,6 +313,21 @@ public class MainWindowViewModel : MyReactiveObject
+         }
+     }
+ 
++    private void QueuePluginReload()
++    {
++        _ = Task.Run(async () =>
++        {
++            try
++            {
++                await V2rayNPluginManager.Instance.Reload(_config);
++            }
++            catch (Exception ex)
++            {
++                Logging.SaveLog("QueuePluginReload", ex);
++            }
++        });
++    }
++
+     private async Task UpdateStatisticsHandler(ServerSpeedItem update)
+     {
+         if (!AppManager.Instance.ShowInTaskbar)

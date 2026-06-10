@@ -28,7 +28,7 @@ Current patches:
 Publish the plugin-capable v2rayN host:
 
 ```powershell
-dotnet publish v2rayn-control\v2rayN\v2rayN\v2rayN\v2rayN.csproj -c Release -r win-x64 --self-contained false -o v2rayn-control\artifacts\v2rayN-win-x64
+dotnet publish v2rayn-control\v2rayN\v2rayN\v2rayN\v2rayN.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -o v2rayn-control\artifacts\v2rayN-win-x64
 ```
 
 Publish the IPC plugin DLL into the host plugin directory:

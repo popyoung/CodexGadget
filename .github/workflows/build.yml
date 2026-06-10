@@ -47,6 +47,7 @@ jobs:
             -c Release \
             -r win-x64 \
             --self-contained false \
+            -p:PublishSingleFile=false \
             -o artifacts/v2rayN-win-x64
 
       - name: Publish IPC plugin
