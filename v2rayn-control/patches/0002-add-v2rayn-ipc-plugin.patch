@@ -1,0 +1,535 @@
+diff --git a/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj b/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj
+new file mode 100644
+index 0000000..ba1c200
+--- /dev/null
++++ b/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj
+@@ -0,0 +1,12 @@
++<Project Sdk="Microsoft.NET.Sdk">
++
++	<PropertyGroup>
++		<OutputType>Library</OutputType>
++		<TargetFramework>net8.0-windows</TargetFramework>
++	</PropertyGroup>
++
++	<ItemGroup>
++		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
++	</ItemGroup>
++
++</Project>
+diff --git a/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
+new file mode 100644
+index 0000000..e2cc170
+--- /dev/null
++++ b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
+@@ -0,0 +1,511 @@
++using System.Collections.Concurrent;
++using System.IO;
++using System.IO.Pipes;
++using System.Security.AccessControl;
++using System.Security.Principal;
++using System.Text;
++using System.Text.Json;
++using System.Text.Json.Serialization;
++using ServiceLib.Common;
++using ServiceLib.Enums;
++using ServiceLib.Events;
++using ServiceLib.Handler;
++using ServiceLib.Manager;
++using ServiceLib.Models;
++using ServiceLib.Plugins;
++using ServiceLib.Resx;
++using ServiceLib.Services;
++
++namespace V2rayN.IpcPlugin;
++
++public sealed class V2rayNIpcPlugin : IV2rayNPlugin
++{
++    private const string PipeName = "v2rayn-control";
++    private static readonly JsonSerializerOptions JsonOptions = new()
++    {
++        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
++        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
++    };
++
++    private readonly ConcurrentDictionary<string, SpeedTestResult> _testUpdates = new();
++    private readonly object _syncRoot = new();
++    private CancellationTokenSource? _cts;
++    private Task? _acceptTask;
++    private Config? _config;
++    private SpeedtestService? _speedtestService;
++
++    public string Name => "v2rayn-ipc";
++
++    public Task Start(V2rayNPluginContext context, CancellationToken token)
++    {
++        lock (_syncRoot)
++        {
++            if (_cts is not null)
++            {
++                return Task.CompletedTask;
++            }
++
++            _config = context.Config;
++            _speedtestService = new SpeedtestService(_config, OnSpeedTestUpdate);
++            _cts = CancellationTokenSource.CreateLinkedTokenSource(token);
++            _acceptTask = Task.Run(() => AcceptLoop(_cts.Token), CancellationToken.None);
++        }
++
++        return Task.CompletedTask;
++    }
++
++    public async Task Stop()
++    {
++        Task? acceptTask;
++        lock (_syncRoot)
++        {
++            _cts?.Cancel();
++            acceptTask = _acceptTask;
++        }
++
++        if (acceptTask is not null)
++        {
++            await Task.WhenAny(acceptTask, Task.Delay(1000));
++        }
++
++        lock (_syncRoot)
++        {
++            _cts?.Dispose();
++            _cts = null;
++            _acceptTask = null;
++        }
++    }
++
++    public async ValueTask DisposeAsync()
++    {
++        await Stop();
++    }
++
++    private async Task AcceptLoop(CancellationToken token)
++    {
++        while (!token.IsCancellationRequested)
++        {
++            NamedPipeServerStream? pipe = null;
++            try
++            {
++                pipe = NamedPipeServerStreamAcl.Create(
++                    PipeName,
++                    PipeDirection.InOut,
++                    NamedPipeServerStream.MaxAllowedServerInstances,
++                    PipeTransmissionMode.Byte,
++                    PipeOptions.Asynchronous,
++                    8192,
++                    8192,
++                    CreatePipeSecurity());
++                await pipe.WaitForConnectionAsync(token);
++                var connectedPipe = pipe;
++                pipe = null;
++                _ = Task.Run(() => HandleClient(connectedPipe, token), CancellationToken.None);
++            }
++            catch (OperationCanceledException)
++            {
++                pipe?.Dispose();
++                return;
++            }
++            catch (Exception ex)
++            {
++                pipe?.Dispose();
++                Logging.SaveLog("V2rayNIpcPlugin AcceptLoop", ex);
++                await Task.Delay(1000, token).ContinueWith(_ => { }, TaskScheduler.Default);
++            }
++        }
++    }
++
++    private async Task HandleClient(NamedPipeServerStream pipe, CancellationToken token)
++    {
++        await using var pipeScope = pipe;
++        using var reader = new StreamReader(pipeScope, Encoding.UTF8, false, 8192, true);
++        await using var writer = new StreamWriter(pipeScope, new UTF8Encoding(false), 8192, true)
++        {
++            AutoFlush = true
++        };
++
++        while (pipeScope.IsConnected && !token.IsCancellationRequested)
++        {
++            var line = await reader.ReadLineAsync();
++            if (line is null)
++            {
++                break;
++            }
++
++            object response;
++            try
++            {
++                response = await HandleRequest(line);
++            }
++            catch (Exception ex)
++            {
++                Logging.SaveLog("V2rayNIpcPlugin HandleRequest", ex);
++                response = Error("internal_error", ex.Message);
++            }
++
++            await writer.WriteLineAsync(JsonSerializer.Serialize(response, JsonOptions));
++        }
++    }
++
++    private async Task<object> HandleRequest(string requestLine)
++    {
++        using var doc = JsonDocument.Parse(requestLine);
++        var root = doc.RootElement;
++        var cmd = GetString(root, "cmd")?.Trim().ToLowerInvariant();
++
++        return cmd switch
++        {
++            "ping" => Ok(new
++            {
++                pipe = PipeName,
++                plugin = Name,
++                version = "1",
++                appVersion = Utils.GetVersion(false),
++                currentIndexId = _config?.IndexId
++            }),
++            "list" => Ok(new
++            {
++                currentIndexId = _config?.IndexId,
++                nodes = await BuildNodeList(root)
++            }),
++            "switch" => await SwitchNode(root),
++            "reload" => ReloadPlugin(),
++            "test" => await StartSpeedTest(root),
++            "test-stop" => StopSpeedTest(),
++            "test-status" => Ok(new { updates = _testUpdates.Values.OrderBy(t => t.IndexId).ToList() }),
++            _ => Error("unknown_command", $"Unknown command: {cmd}")
++        };
++    }
++
++    private async Task<List<NodeModel>> BuildNodeList(JsonElement request)
++    {
++        var group = GetString(request, "group");
++        var filter = GetString(request, "filter") ?? string.Empty;
++        var profiles = await AppManager.Instance.ProfileModels("", filter) ?? [];
++        var profileExs = await ProfileExManager.Instance.GetProfileExs();
++        var exById = profileExs.ToDictionary(t => t.IndexId, t => t);
++
++        if (group.IsNotEmpty())
++        {
++            profiles = profiles
++                .Where(t => string.Equals(t.SubRemarks, group, StringComparison.OrdinalIgnoreCase)
++                            || string.Equals(t.Subid, group, StringComparison.OrdinalIgnoreCase))
++                .ToList();
++        }
++
++        var ordered = profiles
++            .Select((profile, index) => new
++            {
++                Profile = profile,
++                OriginalIndex = index,
++                Ex = exById.GetValueOrDefault(profile.IndexId)
++            })
++            .OrderBy(t => t.Ex?.Sort ?? 0)
++            .ThenBy(t => t.OriginalIndex)
++            .ToList();
++
++        return ordered
++            .Select((item, index) => new NodeModel
++            {
++                Number = index + 1,
++                IndexId = item.Profile.IndexId,
++                Name = item.Profile.Remarks,
++                Group = item.Profile.SubRemarks,
++                GroupId = item.Profile.Subid,
++                Type = item.Profile.ConfigType.ToString(),
++                Address = item.Profile.Address,
++                Port = item.Profile.Port,
++                Delay = item.Ex?.Delay ?? 0,
++                Speed = item.Ex?.Speed ?? 0,
++                SpeedMessage = item.Ex?.Message ?? string.Empty,
++                Current = item.Profile.IndexId == _config?.IndexId
++            })
++            .ToList();
++    }
++
++    private async Task<object> SwitchNode(JsonElement request)
++    {
++        if (_config is null)
++        {
++            return Error("not_ready", "v2rayN config is not initialized.");
++        }
++
++        var node = await ResolveSingleNode(request);
++        if (node is null)
++        {
++            return Error("node_not_found", "Could not resolve a node from number or indexId.");
++        }
++
++        if (await ConfigHandler.SetDefaultServerIndex(_config, node.IndexId) != 0)
++        {
++            return Error("switch_failed", $"Failed to set default server: {node.IndexId}");
++        }
++
++        ScheduleReload();
++
++        return Ok(new
++        {
++            switched = true,
++            node.Number,
++            node.IndexId,
++            node.Name,
++            node.Group
++        });
++    }
++
++    private object ReloadPlugin()
++    {
++        SchedulePluginReload();
++        return Ok(new
++        {
++            pluginsReloaded = true,
++            currentIndexId = _config?.IndexId
++        });
++    }
++
++    private async Task<object> StartSpeedTest(JsonElement request)
++    {
++        if (_config is null || _speedtestService is null)
++        {
++            return Error("not_ready", "v2rayN speed test service is not initialized.");
++        }
++
++        var action = ParseSpeedAction(GetString(request, "action"));
++        var nodes = await ResolveNodes(request, defaultToCurrent: true);
++        if (nodes.Count == 0)
++        {
++            return Error("node_not_found", "No testable nodes were resolved.");
++        }
++
++        var profiles = await AppManager.Instance.GetProfileItemsByIndexIds(nodes.Select(t => t.IndexId));
++        var orderedProfiles = nodes
++            .Select(t => profiles.FirstOrDefault(p => p.IndexId == t.IndexId))
++            .Where(t => t is not null)
++            .ToList();
++
++        if (orderedProfiles.Count == 0)
++        {
++            return Error("node_not_found", "No profile records were found for the selected nodes.");
++        }
++
++        foreach (var node in nodes)
++        {
++            _testUpdates.TryRemove(node.IndexId, out _);
++        }
++
++        _speedtestService.RunLoop(action, orderedProfiles);
++
++        return Ok(new
++        {
++            started = true,
++            action = action.ToString(),
++            count = orderedProfiles.Count,
++            nodes = nodes.Select(t => new { t.Number, t.IndexId, t.Name, t.Group }).ToList()
++        });
++    }
++
++    private object StopSpeedTest()
++    {
++        _speedtestService?.ExitLoop();
++        return Ok(new { stopped = true });
++    }
++
++    private async Task<NodeModel?> ResolveSingleNode(JsonElement request)
++    {
++        var nodes = await ResolveNodes(request, defaultToCurrent: false);
++        return nodes.FirstOrDefault();
++    }
++
++    private async Task<List<NodeModel>> ResolveNodes(JsonElement request, bool defaultToCurrent)
++    {
++        var nodes = await BuildNodeList(request);
++        var ids = GetStringArray(request, "indexIds");
++        var singleId = GetString(request, "indexId");
++        if (singleId.IsNotEmpty())
++        {
++            ids.Add(singleId);
++        }
++
++        var numbers = GetIntArray(request, "numbers");
++        if (TryGetInt(request, "number", out var singleNumber))
++        {
++            numbers.Add(singleNumber);
++        }
++
++        if (ids.Count > 0)
++        {
++            return ids
++                .Select(id => nodes.FirstOrDefault(t => t.IndexId == id))
++                .Where(t => t is not null)
++                .ToList();
++        }
++
++        if (numbers.Count > 0)
++        {
++            return numbers
++                .Select(number => nodes.FirstOrDefault(t => t.Number == number))
++                .Where(t => t is not null)
++                .ToList();
++        }
++
++        if (GetString(request, "group").IsNotEmpty() || GetString(request, "filter").IsNotEmpty())
++        {
++            return nodes;
++        }
++
++        if (defaultToCurrent && _config?.IndexId.IsNotEmpty() == true)
++        {
++            var current = nodes.FirstOrDefault(t => t.IndexId == _config.IndexId);
++            return current is null ? [] : [current];
++        }
++
++        return [];
++    }
++
++    private static ESpeedActionType ParseSpeedAction(string? action)
++    {
++        return (action ?? "realping").Trim().ToLowerInvariant() switch
++        {
++            "tcp" or "tcping" => ESpeedActionType.Tcping,
++            "real" or "realping" or "ping" => ESpeedActionType.Realping,
++            "udp" or "udptest" => ESpeedActionType.UdpTest,
++            "speed" or "speedtest" => ESpeedActionType.Speedtest,
++            "mixed" or "mixedtest" => ESpeedActionType.Mixedtest,
++            _ => ESpeedActionType.Realping
++        };
++    }
++
++    private Task OnSpeedTestUpdate(SpeedTestResult result)
++    {
++        if (result.IndexId.IsNotEmpty())
++        {
++            _testUpdates[result.IndexId] = result;
++        }
++        return Task.CompletedTask;
++    }
++
++    private static void ScheduleReload()
++    {
++        _ = Task.Run(async () =>
++        {
++            await Task.Delay(200);
++            AppEvents.ProfilesRefreshRequested.Publish();
++            AppEvents.ReloadRequested.Publish();
++        });
++    }
++
++    private static void SchedulePluginReload()
++    {
++        _ = Task.Run(async () =>
++        {
++            await Task.Delay(200);
++            AppEvents.PluginsReloadRequested.Publish();
++        });
++    }
++
++    private static PipeSecurity CreatePipeSecurity()
++    {
++        var security = new PipeSecurity();
++        var currentUser = WindowsIdentity.GetCurrent().User;
++        if (currentUser is null)
++        {
++            throw new InvalidOperationException("Cannot resolve the current Windows user SID for v2rayN IPC pipe security.");
++        }
++
++        security.AddAccessRule(new PipeAccessRule(
++            currentUser,
++            PipeAccessRights.FullControl,
++            AccessControlType.Allow));
++
++        return security;
++    }
++
++    private static object Ok(object data) => new { ok = true, data };
++
++    private static object Error(string code, string message) => new
++    {
++        ok = false,
++        error = new { code, message }
++    };
++
++    private static string? GetString(JsonElement element, string name)
++    {
++        if (!element.TryGetProperty(name, out var property))
++        {
++            return null;
++        }
++        return property.ValueKind switch
++        {
++            JsonValueKind.String => property.GetString(),
++            JsonValueKind.Number => property.GetRawText(),
++            _ => null
++        };
++    }
++
++    private static bool TryGetInt(JsonElement element, string name, out int value)
++    {
++        value = 0;
++        return element.TryGetProperty(name, out var property)
++               && property.ValueKind == JsonValueKind.Number
++               && property.TryGetInt32(out value);
++    }
++
++    private static List<int> GetIntArray(JsonElement element, string name)
++    {
++        if (!element.TryGetProperty(name, out var property))
++        {
++            return [];
++        }
++        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var value))
++        {
++            return [value];
++        }
++        if (property.ValueKind != JsonValueKind.Array)
++        {
++            return [];
++        }
++        return property.EnumerateArray()
++            .Where(t => t.ValueKind == JsonValueKind.Number && t.TryGetInt32(out _))
++            .Select(t => t.GetInt32())
++            .ToList();
++    }
++
++    private static List<string> GetStringArray(JsonElement element, string name)
++    {
++        if (!element.TryGetProperty(name, out var property))
++        {
++            return [];
++        }
++        if (property.ValueKind == JsonValueKind.String)
++        {
++            var value = property.GetString();
++            return value.IsNotEmpty() ? [value] : [];
++        }
++        if (property.ValueKind != JsonValueKind.Array)
++        {
++            return [];
++        }
++        return property.EnumerateArray()
++            .Where(t => t.ValueKind == JsonValueKind.String)
++            .Select(t => t.GetString())
++            .Where(t => t.IsNotEmpty())
++            .ToList();
++    }
++
++    private sealed class NodeModel
++    {
++        public int Number { get; set; }
++        public string IndexId { get; set; }
++        public string Name { get; set; }
++        public string? Group { get; set; }
++        public string? GroupId { get; set; }
++        public string Type { get; set; }
++        public string Address { get; set; }
++        public int Port { get; set; }
++        public int Delay { get; set; }
++        public decimal Speed { get; set; }
++        public string SpeedMessage { get; set; }
++        public bool Current { get; set; }
++    }
++}

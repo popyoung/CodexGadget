@@ -1,0 +1,33 @@
+{
+  "name": "auto-shutdown-hook",
+  "version": "0.1.0+codex.20260609184345",
+  "description": "Intercept local shutdown commands before they reach the model.",
+  "author": {
+    "name": "popyoung"
+  },
+  "homepage": "https://developers.openai.com/codex/hooks",
+  "repository": "local",
+  "license": "MIT",
+  "keywords": [
+    "shutdown",
+    "hooks",
+    "productivity"
+  ],
+  "interface": {
+    "displayName": "Auto Shutdown Hook",
+    "shortDescription": "Handle shutdown commands through a local hook.",
+    "longDescription": "Intercepts UserPromptSubmit commands for local Windows shutdown scheduling and cancellation before the prompt reaches the model.",
+    "developerName": "popyoung",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "\u5173\u673a",
+      "\u5173\u673a <\u79d2\u6570>",
+      "\u53d6\u6d88\u5173\u673a"
+    ],
+    "brandColor": "#DC2626"
+  }
+}

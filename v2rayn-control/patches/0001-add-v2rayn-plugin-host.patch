@@ -1,0 +1,282 @@
+diff --git a/v2rayN/ServiceLib/Events/AppEvents.cs b/v2rayN/ServiceLib/Events/AppEvents.cs
+index 5824bfc..9ff7283 100644
+--- a/v2rayN/ServiceLib/Events/AppEvents.cs
++++ b/v2rayN/ServiceLib/Events/AppEvents.cs
+@@ -11,6 +11,7 @@ public static class AppEvents
+     public static readonly EventChannel<Unit> ProfilesRefreshRequested = new();
+     public static readonly EventChannel<Unit> SubscriptionsRefreshRequested = new();
+     public static readonly EventChannel<Unit> ProxiesReloadRequested = new();
++    public static readonly EventChannel<Unit> PluginsReloadRequested = new();
+     public static readonly EventChannel<ServerSpeedItem> DispatcherStatisticsRequested = new();
+ 
+     public static readonly EventChannel<string> SendSnackMsgRequested = new();
+diff --git a/v2rayN/ServiceLib/GlobalUsings.cs b/v2rayN/ServiceLib/GlobalUsings.cs
+index 4553cbc..2d66308 100644
+--- a/v2rayN/ServiceLib/GlobalUsings.cs
++++ b/v2rayN/ServiceLib/GlobalUsings.cs
+@@ -30,6 +30,7 @@ global using ServiceLib.Handler.SysProxy;
+ global using ServiceLib.Helper;
+ global using ServiceLib.Manager;
+ global using ServiceLib.Models;
++global using ServiceLib.Plugins;
+ global using ServiceLib.Resx;
+ global using ServiceLib.Services;
+ global using ServiceLib.Services.CoreConfig;
+diff --git a/v2rayN/ServiceLib/Plugins/IV2rayNPlugin.cs b/v2rayN/ServiceLib/Plugins/IV2rayNPlugin.cs
+new file mode 100644
+index 0000000..3a37e11
+--- /dev/null
++++ b/v2rayN/ServiceLib/Plugins/IV2rayNPlugin.cs
+@@ -0,0 +1,10 @@
++namespace ServiceLib.Plugins;
++
++public interface IV2rayNPlugin : IAsyncDisposable
++{
++    string Name { get; }
++
++    Task Start(V2rayNPluginContext context, CancellationToken token);
++
++    Task Stop();
++}
+diff --git a/v2rayN/ServiceLib/Plugins/V2rayNPluginContext.cs b/v2rayN/ServiceLib/Plugins/V2rayNPluginContext.cs
+new file mode 100644
+index 0000000..4ca6ac2
+--- /dev/null
++++ b/v2rayN/ServiceLib/Plugins/V2rayNPluginContext.cs
+@@ -0,0 +1,6 @@
++namespace ServiceLib.Plugins;
++
++public sealed class V2rayNPluginContext(Config config)
++{
++    public Config Config { get; } = config;
++}
+diff --git a/v2rayN/ServiceLib/Plugins/V2rayNPluginLoadContext.cs b/v2rayN/ServiceLib/Plugins/V2rayNPluginLoadContext.cs
+new file mode 100644
+index 0000000..74d991b
+--- /dev/null
++++ b/v2rayN/ServiceLib/Plugins/V2rayNPluginLoadContext.cs
+@@ -0,0 +1,25 @@
++using System.Runtime.Loader;
++
++namespace ServiceLib.Plugins;
++
++internal sealed class V2rayNPluginLoadContext(string pluginPath) : AssemblyLoadContext(isCollectible: true)
++{
++    private readonly AssemblyDependencyResolver _resolver = new(pluginPath);
++
++    protected override Assembly? Load(AssemblyName assemblyName)
++    {
++        if (assemblyName.Name == typeof(IV2rayNPlugin).Assembly.GetName().Name)
++        {
++            return null;
++        }
++
++        var assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
++        return assemblyPath is null ? null : LoadFromAssemblyPath(assemblyPath);
++    }
++
++    protected override nint LoadUnmanagedDll(string unmanagedDllName)
++    {
++        var libraryPath = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
++        return libraryPath is null ? nint.Zero : LoadUnmanagedDllFromPath(libraryPath);
++    }
++}
+diff --git a/v2rayN/ServiceLib/Plugins/V2rayNPluginManager.cs b/v2rayN/ServiceLib/Plugins/V2rayNPluginManager.cs
+new file mode 100644
+index 0000000..a25b2a9
+--- /dev/null
++++ b/v2rayN/ServiceLib/Plugins/V2rayNPluginManager.cs
+@@ -0,0 +1,169 @@
++namespace ServiceLib.Plugins;
++
++public sealed class V2rayNPluginManager
++{
++    private sealed class LoadedPlugin
++    {
++        public string Path { get; init; }
++        public string ShadowPath { get; init; }
++        public IV2rayNPlugin Plugin { get; init; }
++        public V2rayNPluginLoadContext LoadContext { get; init; }
++        public CancellationTokenSource Cancellation { get; init; }
++    }
++
++    private static readonly Lazy<V2rayNPluginManager> LazyInstance = new(() => new());
++    private readonly SemaphoreSlim _reloadSemaphore = new(1, 1);
++    private readonly List<LoadedPlugin> _plugins = [];
++    private static readonly string _tag = "V2rayNPluginManager";
++
++    public static V2rayNPluginManager Instance => LazyInstance.Value;
++
++    public async Task Reload(Config config)
++    {
++        await _reloadSemaphore.WaitAsync();
++        try
++        {
++            await StopAllInternal();
++            await LoadAll(config);
++        }
++        finally
++        {
++            _reloadSemaphore.Release();
++        }
++    }
++
++    public async Task StopAll()
++    {
++        await _reloadSemaphore.WaitAsync();
++        try
++        {
++            await StopAllInternal();
++        }
++        finally
++        {
++            _reloadSemaphore.Release();
++        }
++    }
++
++    private async Task LoadAll(Config config)
++    {
++        var pluginDir = Path.Combine(Utils.StartupPath(), "guiPlugins");
++        Directory.CreateDirectory(pluginDir);
++
++        foreach (var pluginPath in Directory.EnumerateFiles(pluginDir, "*.dll", SearchOption.TopDirectoryOnly))
++        {
++            await LoadOne(config, pluginPath);
++        }
++    }
++
++    private async Task LoadOne(Config config, string pluginPath)
++    {
++        var shadowPath = ShadowCopy(pluginPath);
++        var loadContext = new V2rayNPluginLoadContext(shadowPath);
++        try
++        {
++            var assembly = loadContext.LoadFromAssemblyPath(shadowPath);
++            var pluginTypes = assembly.GetTypes()
++                .Where(t => typeof(IV2rayNPlugin).IsAssignableFrom(t)
++                            && t is { IsAbstract: false, IsInterface: false }
++                            && t.GetConstructor(Type.EmptyTypes) is not null)
++                .ToList();
++            if (pluginTypes.Count == 0)
++            {
++                loadContext.Unload();
++                return;
++            }
++
++            foreach (var pluginType in pluginTypes)
++            {
++                var plugin = (IV2rayNPlugin)Activator.CreateInstance(pluginType);
++                var cancellation = new CancellationTokenSource();
++                await plugin.Start(new V2rayNPluginContext(config), cancellation.Token);
++                _plugins.Add(new LoadedPlugin
++                {
++                    Path = pluginPath,
++                    ShadowPath = shadowPath,
++                    Plugin = plugin,
++                    LoadContext = loadContext,
++                    Cancellation = cancellation
++                });
++                Logging.SaveLog($"Loaded plugin {plugin.Name}: {pluginPath}");
++            }
++        }
++        catch (Exception ex)
++        {
++            Logging.SaveLog($"{_tag}: failed to load {pluginPath}", ex);
++            loadContext.Unload();
++        }
++    }
++
++    private static string ShadowCopy(string pluginPath)
++    {
++        var pluginName = Path.GetFileNameWithoutExtension(pluginPath);
++        var sourceDir = Path.GetDirectoryName(pluginPath)!;
++        var shadowDir = Path.Combine(
++            Utils.GetTempPath("gui-plugin-cache"),
++            $"{pluginName}-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Guid.NewGuid():N}");
++        Directory.CreateDirectory(shadowDir);
++
++        foreach (var sourcePath in Directory.EnumerateFiles(sourceDir, "*", SearchOption.TopDirectoryOnly))
++        {
++            var extension = Path.GetExtension(sourcePath);
++            if (!string.Equals(extension, ".dll", StringComparison.OrdinalIgnoreCase)
++                && !string.Equals(extension, ".json", StringComparison.OrdinalIgnoreCase)
++                && !string.Equals(extension, ".deps.json", StringComparison.OrdinalIgnoreCase)
++                && !string.Equals(extension, ".runtimeconfig.json", StringComparison.OrdinalIgnoreCase))
++            {
++                continue;
++            }
++
++            File.Copy(sourcePath, Path.Combine(shadowDir, Path.GetFileName(sourcePath)), true);
++        }
++
++        return Path.Combine(shadowDir, Path.GetFileName(pluginPath));
++    }
++
++    private async Task StopAllInternal()
++    {
++        foreach (var loaded in _plugins.ToList())
++        {
++            try
++            {
++                loaded.Cancellation.Cancel();
++                await loaded.Plugin.Stop();
++                await loaded.Plugin.DisposeAsync();
++            }
++            catch (Exception ex)
++            {
++                Logging.SaveLog($"{_tag}: failed to stop {loaded.Path}", ex);
++            }
++            finally
++            {
++                loaded.Cancellation.Dispose();
++                loaded.LoadContext.Unload();
++                TryDeleteShadowDirectory(loaded.ShadowPath);
++            }
++        }
++
++        _plugins.Clear();
++        GC.Collect();
++        GC.WaitForPendingFinalizers();
++        GC.Collect();
++    }
++
++    private static void TryDeleteShadowDirectory(string shadowPath)
++    {
++        try
++        {
++            var shadowDir = Path.GetDirectoryName(shadowPath);
++            if (shadowDir.IsNotEmpty() && Directory.Exists(shadowDir))
++            {
++                Directory.Delete(shadowDir, true);
++            }
++        }
++        catch
++        {
++            // The collectible AssemblyLoadContext can release files after finalization; stale cache dirs are harmless.
++        }
++    }
++}
+diff --git a/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs b/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs
+index 53ad06c..f16b42b 100644
+--- a/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs
++++ b/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs
+@@ -236,6 +236,11 @@ public class MainWindowViewModel : MyReactiveObject
+             .ObserveOn(RxSchedulers.MainThreadScheduler)
+             .Subscribe(async _ => await Reload());
+ 
++        AppEvents.PluginsReloadRequested
++            .AsObservable()
++            .ObserveOn(RxSchedulers.MainThreadScheduler)
++            .Subscribe(async _ => await V2rayNPluginManager.Instance.Reload(_config));
++
+         AppEvents.AddServerViaScanRequested
+             .AsObservable()
+             .ObserveOn(RxSchedulers.MainThreadScheduler)
+@@ -265,6 +270,7 @@ public class MainWindowViewModel : MyReactiveObject
+         await ConfigHandler.InitBuiltinFullConfigTemplate(_config);
+         await ProfileExManager.Instance.Init();
+         await CoreManager.Instance.Init(_config, UpdateHandler);
++        await V2rayNPluginManager.Instance.Reload(_config);
+         TaskManager.Instance.RegUpdateTask(_config, UpdateTaskHandler);
+ 
+         if (_config.GuiItem.EnableStatistics || _config.GuiItem.DisplayRealTimeSpeed)

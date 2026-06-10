@@ -1,0 +1,74 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      v2rayn_ref:
+        description: "Optional v2rayN tag, branch, or commit to test against"
+        required: false
+        default: ""
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-win64:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout requested v2rayN ref
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.v2rayn_ref != '' }}
+        run: |
+          git -C v2rayn-control/v2rayN fetch --tags origin
+          git -C v2rayn-control/v2rayN checkout "${{ inputs.v2rayn_ref }}"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Apply v2rayN patches
+        run: |
+          git -C v2rayn-control/v2rayN apply --3way \
+            ../patches/0001-add-v2rayn-plugin-host.patch \
+            ../patches/0002-add-v2rayn-ipc-plugin.patch
+
+      - name: Publish v2rayN win-x64
+        run: |
+          dotnet publish v2rayn-control/v2rayN/v2rayN/v2rayN/v2rayN.csproj \
+            -c Release \
+            -r win-x64 \
+            --self-contained false \
+            -o artifacts/v2rayN-win-x64
+
+      - name: Publish IPC plugin
+        run: |
+          mkdir -p artifacts/v2rayN-win-x64/guiPlugins
+          dotnet publish v2rayn-control/v2rayN/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj \
+            -c Release \
+            -r win-x64 \
+            --self-contained false \
+            -p:PublishSingleFile=false \
+            -o artifacts/v2rayN-win-x64/guiPlugins
+
+      - name: Publish Codex hook
+        run: |
+          dotnet publish v2rayn-control/codex-plugin/hooks/V2rayN.Control.Hook/V2rayN.Control.Hook.csproj \
+            -c Release \
+            -r win-x64 \
+            --self-contained false \
+            -o artifacts/codex-hook
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-gadget-win-x64
+          path: artifacts/

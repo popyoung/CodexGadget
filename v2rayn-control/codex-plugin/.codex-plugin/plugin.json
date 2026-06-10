@@ -1,0 +1,26 @@
+{
+  "name": "v2rayn-control",
+  "version": "0.5.0+codex.20260609195228",
+  "description": "Control local v2rayN groups and nodes through a Codex UserPromptSubmit hook.",
+  "author": {
+    "name": "Local developer"
+  },
+  "interface": {
+    "displayName": "v2rayN Control",
+    "shortDescription": "List groups, test current-group nodes, and switch by number.",
+    "longDescription": "Provides a .NET 8 UserPromptSubmit hook for command-style v2rayN control. The hook keeps its own current-group state, lists and auto-tests that group, switches nodes by the next numeric selection, and can auto-switch to the Nth usable current-group node through v2rayN's local named pipe IPC endpoint.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Local"
+    ],
+    "defaultPrompt": [
+      "vpn group",
+      "vpn list",
+      "vpn auto 1",
+      "3"
+    ]
+  },
+  "skills": "./skills/"
+}

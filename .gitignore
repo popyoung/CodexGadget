@@ -1,0 +1,19 @@
+# Build outputs
+**/bin/
+**/obj/
+**/publish/
+**/artifacts/
+
+# Local runtime/test data
+.codex-todo/
+v2rayn-control/tmp-v2rayn-test/
+
+# IDE/editor state
+.vs/
+.idea/
+*.user
+*.suo
+*.log
+
+# Temporary patch verification worktrees
+v2rayn-control/_verify-v2rayN-patch/

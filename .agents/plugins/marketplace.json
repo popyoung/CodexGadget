@@ -1,0 +1,32 @@
+{
+  "name": "codex-gadget-local",
+  "interface": {
+    "displayName": "Codex Gadget Local"
+  },
+  "plugins": [
+    {
+      "name": "auto-shutdown-hook",
+      "source": {
+        "source": "local",
+        "path": "./shutdown/plugins/auto-shutdown-hook"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "v2rayn-control",
+      "source": {
+        "source": "local",
+        "path": "./v2rayn-control/codex-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
