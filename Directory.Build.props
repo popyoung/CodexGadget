@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <CodexGadgetOutputRoot Condition="'$(CodexGadgetOutputRoot)' == ''">Z:\codex\codexGadget</CodexGadgetOutputRoot>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'v2rayN'">
+    <PublishDir>$(CodexGadgetOutputRoot)\v2rayN-win-x64\</PublishDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'V2rayN.IpcPlugin'">
+    <PublishDir>$(CodexGadgetOutputRoot)\v2rayN-win-x64\guiPlugins\</PublishDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'V2rayN.Control.Hook'">
+    <PublishDir>$(CodexGadgetOutputRoot)\codex-hook\</PublishDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'AutoShutdownHook'">
+    <PublishDir>$(CodexGadgetOutputRoot)\auto-shutdown-hook\win-x64\</PublishDir>
+  </PropertyGroup>
+</Project>

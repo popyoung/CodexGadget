@@ -24,5 +24,13 @@ git submodule update --init --recursive
 
 The v2rayN source is kept as a submodule at `v2rayn-control/v2rayN`.
 Local changes are stored as patch files under `v2rayn-control/patches`.
+Local publish outputs are fixed under `Z:\codex\codexGadget\...` by `Directory.Build.props`.
+
+Default local publish directories:
+
+- `v2rayN`: `Z:\codex\codexGadget\v2rayN-win-x64`
+- `V2rayN.IpcPlugin`: `Z:\codex\codexGadget\v2rayN-win-x64\guiPlugins`
+- `V2rayN.Control.Hook`: `Z:\codex\codexGadget\codex-hook`
+- `AutoShutdownHook`: `Z:\codex\codexGadget\auto-shutdown-hook\win-x64`
 
 See `v2rayn-control/README.md` for patch, build, and upgrade commands.

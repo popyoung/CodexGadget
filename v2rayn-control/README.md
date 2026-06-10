@@ -7,7 +7,7 @@ This directory contains the Codex `vpn` hook plugin and the v2rayN IPC integrati
 - `codex-plugin/`: Codex `UserPromptSubmit` hook plugin source.
 - `v2rayN/`: upstream v2rayN git submodule, currently pinned to v2rayN 7.21.3.
 - `patches/`: local v2rayN changes, stored as git patches.
-- `artifacts/`: ignored local build outputs.
+- `artifacts/`: ignored local build outputs from older/manual runs.
 - `tmp-v2rayn-test/`: ignored local v2rayN test data.
 
 ## Patch Stack
@@ -28,19 +28,19 @@ Current patches:
 Publish the plugin-capable v2rayN host:
 
 ```powershell
-dotnet publish v2rayn-control\v2rayN\v2rayN\v2rayN\v2rayN.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -o v2rayn-control\artifacts\v2rayN-win-x64
+dotnet publish v2rayn-control\v2rayN\v2rayN\v2rayN\v2rayN.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -o Z:\codex\codexGadget\v2rayN-win-x64
 ```
 
 Publish the IPC plugin DLL into the host plugin directory:
 
 ```powershell
-dotnet publish v2rayn-control\v2rayN\v2rayN\V2rayN.IpcPlugin\V2rayN.IpcPlugin.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -o v2rayn-control\artifacts\v2rayN-win-x64\guiPlugins
+dotnet publish v2rayn-control\v2rayN\v2rayN\V2rayN.IpcPlugin\V2rayN.IpcPlugin.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -o Z:\codex\codexGadget\v2rayN-win-x64\guiPlugins
 ```
 
 Publish the Codex hook:
 
 ```powershell
-dotnet publish v2rayn-control\codex-plugin\hooks\V2rayN.Control.Hook\V2rayN.Control.Hook.csproj -c Release -r win-x64 --self-contained false -o v2rayn-control\artifacts\codex-hook
+dotnet publish v2rayn-control\codex-plugin\hooks\V2rayN.Control.Hook\V2rayN.Control.Hook.csproj -c Release -r win-x64 --self-contained false -o Z:\codex\codexGadget\codex-hook
 ```
 
 ## Upgrade v2rayN
