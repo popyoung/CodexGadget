@@ -18,10 +18,10 @@ index 0000000..ba1c200
 +</Project>
 diff --git a/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
 new file mode 100644
-index 0000000..e2cc170
+index 0000000..f23e687
 --- /dev/null
 +++ b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
-@@ -0,0 +1,511 @@
+@@ -0,0 +1,526 @@
 +using System.Collections.Concurrent;
 +using System.IO;
 +using System.IO.Pipes;
@@ -184,7 +184,7 @@ index 0000000..e2cc170
 +            {
 +                pipe = PipeName,
 +                plugin = Name,
-+                version = "1",
++                version = "2",
 +                appVersion = Utils.GetVersion(false),
 +                currentIndexId = _config?.IndexId
 +            }),
@@ -439,6 +439,21 @@ index 0000000..e2cc170
 +
 +        security.AddAccessRule(new PipeAccessRule(
 +            currentUser,
++            PipeAccessRights.FullControl,
++            AccessControlType.Allow));
++
++        security.AddAccessRule(new PipeAccessRule(
++            new SecurityIdentifier(WellKnownSidType.WorldSid, null),
++            PipeAccessRights.FullControl,
++            AccessControlType.Allow));
++
++        security.AddAccessRule(new PipeAccessRule(
++            new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null),
++            PipeAccessRights.FullControl,
++            AccessControlType.Allow));
++
++        security.AddAccessRule(new PipeAccessRule(
++            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
 +            PipeAccessRights.FullControl,
 +            AccessControlType.Allow));
 +
