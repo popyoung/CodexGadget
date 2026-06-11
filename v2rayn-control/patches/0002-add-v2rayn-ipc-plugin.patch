@@ -1,14 +1,15 @@
 diff --git a/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj b/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj
 new file mode 100644
-index 0000000..ba1c200
+index 0000000..e2d8cdd
 --- /dev/null
 +++ b/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,13 @@
 +<Project Sdk="Microsoft.NET.Sdk">
 +
 +	<PropertyGroup>
 +		<OutputType>Library</OutputType>
 +		<TargetFramework>net8.0-windows</TargetFramework>
++		<UseWPF>true</UseWPF>
 +	</PropertyGroup>
 +
 +	<ItemGroup>
@@ -18,21 +19,23 @@ index 0000000..ba1c200
 +</Project>
 diff --git a/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
 new file mode 100644
-index 0000000..f23e687
+index 0000000..3ef2d4f
 --- /dev/null
 +++ b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
-@@ -0,0 +1,526 @@
+@@ -0,0 +1,785 @@
 +using System.Collections.Concurrent;
 +using System.IO;
 +using System.IO.Pipes;
++using System.Reflection;
 +using System.Security.AccessControl;
 +using System.Security.Principal;
 +using System.Text;
 +using System.Text.Json;
 +using System.Text.Json.Serialization;
++using System.Windows;
++using System.Windows.Media;
 +using ServiceLib.Common;
 +using ServiceLib.Enums;
-+using ServiceLib.Events;
 +using ServiceLib.Handler;
 +using ServiceLib.Manager;
 +using ServiceLib.Models;
@@ -184,7 +187,7 @@ index 0000000..f23e687
 +            {
 +                pipe = PipeName,
 +                plugin = Name,
-+                version = "2",
++                version = "4",
 +                appVersion = Utils.GetVersion(false),
 +                currentIndexId = _config?.IndexId
 +            }),
@@ -405,8 +408,178 @@ index 0000000..f23e687
 +        if (result.IndexId.IsNotEmpty())
 +        {
 +            _testUpdates[result.IndexId] = result;
++            UpdateProfilesView(result);
 +        }
 +        return Task.CompletedTask;
++    }
++
++    private static void UpdateProfilesView(SpeedTestResult result)
++    {
++        try
++        {
++            var application = Application.Current;
++            var dispatcher = application?.Dispatcher;
++            if (application is null || dispatcher is null)
++            {
++                return;
++            }
++
++            dispatcher.BeginInvoke(new Action(() =>
++            {
++                try
++                {
++                    var updated = 0;
++                    foreach (Window window in application.Windows)
++                    {
++                        updated += UpdateProfilesViewModels(window, result);
++                    }
++
++                    Logging.SaveLog($"V2rayNIpcPlugin updated {updated} ProfilesViewModel instance(s).");
++                }
++                catch (Exception ex)
++                {
++                    Logging.SaveLog("V2rayNIpcPlugin UpdateProfilesView", ex);
++                }
++            }));
++        }
++        catch (Exception ex)
++        {
++            Logging.SaveLog("V2rayNIpcPlugin UpdateProfilesView", ex);
++        }
++    }
++
++    private static int UpdateProfilesViewModels(DependencyObject root, SpeedTestResult result)
++    {
++        var updated = 0;
++        var visited = new HashSet<DependencyObject>();
++        var stack = new Stack<DependencyObject>();
++        stack.Push(root);
++
++        while (stack.Count > 0)
++        {
++            var current = stack.Pop();
++            if (!visited.Add(current))
++            {
++                continue;
++            }
++
++            if (TryGetViewModel(current, "ServiceLib.ViewModels.ProfilesViewModel", out var viewModel)
++                && TrySetSpeedTestResult(viewModel, result))
++            {
++                updated++;
++            }
++
++            foreach (var child in GetChildren(current))
++            {
++                stack.Push(child);
++            }
++        }
++
++        return updated;
++    }
++
++    private static bool TryGetViewModel(DependencyObject current, string viewModelTypeName, out object viewModel)
++    {
++        viewModel = null!;
++
++        if (current is FrameworkElement { DataContext: { } dataContext }
++            && IsViewModel(dataContext, viewModelTypeName))
++        {
++            viewModel = dataContext;
++            return true;
++        }
++
++        var property = current.GetType().GetProperty(
++            "ViewModel",
++            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
++        var value = property?.GetValue(current);
++        if (!IsViewModel(value, viewModelTypeName))
++        {
++            return false;
++        }
++
++        viewModel = value!;
++        return true;
++    }
++
++    private static bool IsViewModel(object? value, string viewModelTypeName)
++    {
++        return string.Equals(
++            value?.GetType().FullName,
++            viewModelTypeName,
++            StringComparison.Ordinal);
++    }
++
++    private static bool TrySetSpeedTestResult(object viewModel, SpeedTestResult result)
++    {
++        var method = viewModel.GetType()
++            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
++            .FirstOrDefault(t => t.Name == "SetSpeedTestResult"
++                                 && t.GetParameters() is [{ }]);
++        if (method is null)
++        {
++            return false;
++        }
++
++        var parameterType = method.GetParameters()[0].ParameterType;
++        var hostResult = BuildHostSpeedTestResult(parameterType, result);
++        if (hostResult is null)
++        {
++            return false;
++        }
++
++        var invokeResult = method.Invoke(viewModel, [hostResult]);
++        if (invokeResult is Task task)
++        {
++            _ = task;
++        }
++
++        return true;
++    }
++
++    private static object? BuildHostSpeedTestResult(Type parameterType, SpeedTestResult result)
++    {
++        if (parameterType.IsInstanceOfType(result))
++        {
++            return result;
++        }
++
++        var hostResult = Activator.CreateInstance(parameterType);
++        if (hostResult is null)
++        {
++            return null;
++        }
++
++        parameterType.GetProperty("IndexId")?.SetValue(hostResult, result.IndexId);
++        parameterType.GetProperty("Delay")?.SetValue(hostResult, result.Delay);
++        parameterType.GetProperty("Speed")?.SetValue(hostResult, result.Speed);
++        return hostResult;
++    }
++
++    private static IEnumerable<DependencyObject> GetChildren(DependencyObject parent)
++    {
++        var visualCount = 0;
++        try
++        {
++            visualCount = VisualTreeHelper.GetChildrenCount(parent);
++        }
++        catch
++        {
++        }
++
++        for (var i = 0; i < visualCount; i++)
++        {
++            var child = VisualTreeHelper.GetChild(parent, i);
++            if (child is not null)
++            {
++                yield return child;
++            }
++        }
++
++        foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>())
++        {
++            yield return child;
++        }
 +    }
 +
 +    private static void ScheduleReload()
@@ -414,18 +587,105 @@ index 0000000..f23e687
 +        _ = Task.Run(async () =>
 +        {
 +            await Task.Delay(200);
-+            AppEvents.ProfilesRefreshRequested.Publish();
-+            AppEvents.ReloadRequested.Publish();
++            DispatchToUi(() =>
++            {
++                InvokeViewModelMethod("ServiceLib.ViewModels.ProfilesViewModel", "RefreshServersBiz");
++                InvokeViewModelMethod("ServiceLib.ViewModels.MainWindowViewModel", "Reload");
++            });
 +        });
 +    }
 +
-+    private static void SchedulePluginReload()
++    private void SchedulePluginReload()
 +    {
++        var config = _config ?? AppManager.Instance.Config;
 +        _ = Task.Run(async () =>
 +        {
 +            await Task.Delay(200);
-+            AppEvents.PluginsReloadRequested.Publish();
++            await V2rayNPluginManager.Instance.Reload(config);
 +        });
++    }
++
++    private static void DispatchToUi(Action action)
++    {
++        try
++        {
++            var dispatcher = Application.Current?.Dispatcher;
++            if (dispatcher is null)
++            {
++                return;
++            }
++
++            dispatcher.BeginInvoke(action);
++        }
++        catch (Exception ex)
++        {
++            Logging.SaveLog("V2rayNIpcPlugin DispatchToUi", ex);
++        }
++    }
++
++    private static void InvokeViewModelMethod(string viewModelTypeName, string methodName)
++    {
++        var application = Application.Current;
++        if (application is null)
++        {
++            return;
++        }
++
++        foreach (Window window in application.Windows)
++        {
++            foreach (var viewModel in FindViewModels(window, viewModelTypeName))
++            {
++                TryInvokeMethod(viewModel, methodName);
++            }
++        }
++    }
++
++    private static IEnumerable<object> FindViewModels(DependencyObject root, string viewModelTypeName)
++    {
++        var visited = new HashSet<DependencyObject>();
++        var stack = new Stack<DependencyObject>();
++        stack.Push(root);
++
++        while (stack.Count > 0)
++        {
++            var current = stack.Pop();
++            if (!visited.Add(current))
++            {
++                continue;
++            }
++
++            if (TryGetViewModel(current, viewModelTypeName, out var viewModel))
++            {
++                yield return viewModel;
++            }
++
++            foreach (var child in GetChildren(current))
++            {
++                stack.Push(child);
++            }
++        }
++    }
++
++    private static bool TryInvokeMethod(object target, string methodName)
++    {
++        var method = target.GetType().GetMethod(
++            methodName,
++            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
++            null,
++            [],
++            null);
++        if (method is null)
++        {
++            return false;
++        }
++
++        var result = method.Invoke(target, []);
++        if (result is Task task)
++        {
++            _ = task;
++        }
++
++        return true;
 +    }
 +
 +    private static PipeSecurity CreatePipeSecurity()
