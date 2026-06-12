@@ -1,28 +1,40 @@
 diff --git a/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj b/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj
 new file mode 100644
-index 0000000..e2d8cdd
+index 0000000..8b9810c
 --- /dev/null
 +++ b/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,25 @@
 +<Project Sdk="Microsoft.NET.Sdk">
 +
 +	<PropertyGroup>
 +		<OutputType>Library</OutputType>
 +		<TargetFramework>net8.0-windows</TargetFramework>
 +		<UseWPF>true</UseWPF>
++		<CodexGadgetOutputRoot Condition="'$(CodexGadgetOutputRoot)' == ''">Z:\codex\codexGadget</CodexGadgetOutputRoot>
++		<V2rayNIpcPluginOutputDir>$(CodexGadgetOutputRoot)\v2rayN-win-x64\guiPlugins\</V2rayNIpcPluginOutputDir>
++		<CodexGadgetCopyIpcPlugin Condition="'$(CodexGadgetCopyIpcPlugin)' == ''">true</CodexGadgetCopyIpcPlugin>
 +	</PropertyGroup>
 +
 +	<ItemGroup>
-+		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
++		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" Private="false" />
 +	</ItemGroup>
++
++	<Target Name="CopyV2rayNIpcPluginToOutput"
++	        AfterTargets="Build"
++	        Condition="'$(Configuration)' == 'Release' and '$(CodexGadgetCopyIpcPlugin)' == 'true'">
++		<MakeDir Directories="$(V2rayNIpcPluginOutputDir)" />
++		<Copy SourceFiles="$(TargetPath)"
++		      DestinationFolder="$(V2rayNIpcPluginOutputDir)"
++		      SkipUnchangedFiles="true" />
++	</Target>
 +
 +</Project>
 diff --git a/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
 new file mode 100644
-index 0000000..3ef2d4f
+index 0000000..3ae10fa
 --- /dev/null
 +++ b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
-@@ -0,0 +1,785 @@
+@@ -0,0 +1,1606 @@
 +using System.Collections.Concurrent;
 +using System.IO;
 +using System.IO.Pipes;
@@ -30,10 +42,12 @@ index 0000000..3ef2d4f
 +using System.Security.AccessControl;
 +using System.Security.Principal;
 +using System.Text;
++using System.Text.Encodings.Web;
 +using System.Text.Json;
 +using System.Text.Json.Serialization;
 +using System.Windows;
 +using System.Windows.Media;
++using ServiceLib;
 +using ServiceLib.Common;
 +using ServiceLib.Enums;
 +using ServiceLib.Handler;
@@ -51,7 +65,16 @@ index 0000000..3ef2d4f
 +    private static readonly JsonSerializerOptions JsonOptions = new()
 +    {
 +        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
++        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
++        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
++    };
++
++    private static readonly JsonSerializerOptions PrettyJsonOptions = new()
++    {
++        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
++        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
++        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
++        WriteIndented = true
 +    };
 +
 +    private readonly ConcurrentDictionary<string, SpeedTestResult> _testUpdates = new();
@@ -187,7 +210,7 @@ index 0000000..3ef2d4f
 +            {
 +                pipe = PipeName,
 +                plugin = Name,
-+                version = "4",
++                version = "5",
 +                appVersion = Utils.GetVersion(false),
 +                currentIndexId = _config?.IndexId
 +            }),
@@ -201,6 +224,7 @@ index 0000000..3ef2d4f
 +            "test" => await StartSpeedTest(root),
 +            "test-stop" => StopSpeedTest(),
 +            "test-status" => Ok(new { updates = _testUpdates.Values.OrderBy(t => t.IndexId).ToList() }),
++            "export-karing" or "karing-export" => await ExportKaring(root),
 +            _ => Error("unknown_command", $"Unknown command: {cmd}")
 +        };
 +    }
@@ -338,6 +362,110 @@ index 0000000..3ef2d4f
 +        return Ok(new { stopped = true });
 +    }
 +
++    private async Task<object> ExportKaring(JsonElement request)
++    {
++        if (_config is null)
++        {
++            return Error("not_ready", "v2rayN config is not initialized.");
++        }
++
++        var routing = await ConfigHandler.GetDefaultRouting(_config);
++        if (routing is null)
++        {
++            return Error("routing_not_found", "Could not resolve the current routing item.");
++        }
++
++        var rules = JsonUtils.Deserialize<List<RulesItem>>(routing.RuleSet) ?? [];
++        var warnings = new List<string>();
++        var karingDoc = new KaringCustomRulesDocument();
++        var singboxRules = new List<Rule4Sbox>();
++
++        var disabledCount = 0;
++        var dnsCount = 0;
++        var exportedRoutingCount = 0;
++
++        for (var i = 0; i < rules.Count; i++)
++        {
++            var item = rules[i];
++            if (!item.Enabled)
++            {
++                disabledCount++;
++                continue;
++            }
++
++            if (item.RuleType == ERuleType.DNS)
++            {
++                dnsCount++;
++                continue;
++            }
++
++            exportedRoutingCount++;
++            var ruleName = GetRuleName(item, i + 1);
++            var karingRule = BuildKaringRule(item, ruleName, warnings);
++            if (karingRule is not null)
++            {
++                karingDoc.Rules.Add(karingRule);
++            }
++
++            singboxRules.AddRange(BuildSingboxRules(item, ruleName, warnings));
++        }
++
++        var outputDir = ResolveKaringOutputDir(request, routing);
++        Directory.CreateDirectory(outputDir);
++
++        var karingPath = Path.Combine(outputDir, "diversion_rules_custom.json");
++        var singboxPath = Path.Combine(outputDir, "v2rayn-singbox-route.json");
++        var rawPath = Path.Combine(outputDir, "v2rayn-routing-raw.json");
++
++        await WriteJsonFile(karingPath, karingDoc);
++        await WriteJsonFile(singboxPath, new
++        {
++            route = new
++            {
++                rules = singboxRules,
++                final = Global.ProxyTag,
++                domainStrategy = routing.DomainStrategy4Singbox.IsNotEmpty()
++                    ? routing.DomainStrategy4Singbox
++                    : routing.DomainStrategy
++            }
++        });
++        await WriteJsonFile(rawPath, new
++        {
++            routing = new
++            {
++                routing.Id,
++                routing.Remarks,
++                routing.Enabled,
++                routing.DomainStrategy,
++                routing.DomainStrategy4Singbox,
++                routing.RuleNum
++            },
++            rules
++        });
++
++        return Ok(new
++        {
++            routing = new
++            {
++                routing.Id,
++                routing.Remarks,
++                ruleCount = rules.Count,
++                exportedRoutingCount,
++                disabledCount,
++                dnsCount
++            },
++            karingRules = karingDoc.Rules.Count,
++            singboxRules = singboxRules.Count,
++            files = new
++            {
++                karing = karingPath,
++                singboxRoute = singboxPath,
++                raw = rawPath
++            },
++            warnings
++        });
++    }
++
 +    private async Task<NodeModel?> ResolveSingleNode(JsonElement request)
 +    {
 +        var nodes = await ResolveNodes(request, defaultToCurrent: false);
@@ -401,6 +529,664 @@ index 0000000..3ef2d4f
 +            "mixed" or "mixedtest" => ESpeedActionType.Mixedtest,
 +            _ => ESpeedActionType.Realping
 +        };
++    }
++
++    private static string ResolveKaringOutputDir(JsonElement request, RoutingItem routing)
++    {
++        var outputDir = GetString(request, "outputDir") ?? GetString(request, "path");
++        if (outputDir.IsNotEmpty())
++        {
++            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(outputDir!));
++        }
++
++        var safeRemarks = SanitizeFileName(routing.Remarks);
++        var dirName = $"{DateTime.Now:yyyyMMdd-HHmmss}-{safeRemarks}".TrimEnd('-');
++        return Path.Combine(Utils.StartupPath(), "exports", "karing", dirName);
++    }
++
++    private static async Task WriteJsonFile(string path, object value)
++    {
++        var json = JsonSerializer.Serialize(value, PrettyJsonOptions);
++        await File.WriteAllTextAsync(path, json + Environment.NewLine, new UTF8Encoding(false));
++    }
++
++    private static KaringCustomRule? BuildKaringRule(RulesItem item, string ruleName, List<string> warnings)
++    {
++        var rule = new KaringCustomRule
++        {
++            Name = ruleName,
++            Outbound = MapKaringOutbound(item.OutboundTag, ruleName, warnings),
++            Switch = true,
++            Or = true
++        };
++
++        FillKaringBaseConditions(item, rule, ruleName, warnings);
++
++        if (item.Domain?.Count > 0)
++        {
++            foreach (var domain in item.Domain)
++            {
++                ParseKaringDomain(domain, rule, ruleName, warnings);
++            }
++        }
++
++        if (item.Ip?.Count > 0)
++        {
++            foreach (var address in item.Ip)
++            {
++                ParseKaringAddress(address, rule, ruleName, warnings);
++            }
++        }
++
++        if (item.Process?.Count > 0)
++        {
++            warnings.Add($"Rule `{ruleName}` contains process matching; it may not be useful on Android Karing.");
++            foreach (var process in item.Process.Select(t => t?.Trim()).Where(t => t.IsNotEmpty()))
++            {
++                if (process!.Contains('/') || process.Contains('\\'))
++                {
++                    rule.ProcessPath ??= [];
++                    rule.ProcessPath.Add(process);
++                }
++                else
++                {
++                    rule.ProcessName ??= [];
++                    rule.ProcessName.Add(Utils.GetExeName(process));
++                }
++            }
++        }
++
++        if (item.InboundTag?.Count > 0)
++        {
++            warnings.Add($"Rule `{ruleName}` contains inboundTag, which is not exported to Karing custom diversion rules.");
++        }
++
++        if (!HasKaringCriteria(rule))
++        {
++            warnings.Add($"Rule `{ruleName}` has no portable Karing criteria and was skipped in diversion_rules_custom.json.");
++            return null;
++        }
++
++        NormalizeKaringRule(rule);
++        return rule;
++    }
++
++    private static List<Rule4Sbox> BuildSingboxRules(RulesItem item, string ruleName, List<string> warnings)
++    {
++        var result = new List<Rule4Sbox>();
++        var rule = new Rule4Sbox();
++        var outbound = item.OutboundTag ?? Global.ProxyTag;
++        if (string.Equals(outbound, Global.BlockTag, StringComparison.OrdinalIgnoreCase))
++        {
++            rule.action = "reject";
++        }
++        else
++        {
++            rule.outbound = MapSingboxOutbound(outbound, ruleName, warnings);
++        }
++
++        FillSingboxBaseConditions(item, rule, ruleName, warnings);
++
++        var hasSpecificCriteria = false;
++        if (item.Domain?.Count > 0)
++        {
++            var domainRule = JsonUtils.DeepCopy(rule) ?? new Rule4Sbox();
++            var count = 0;
++            foreach (var domain in item.Domain)
++            {
++                if (ParseSingboxDomain(domain, domainRule, ruleName, warnings))
++                {
++                    count++;
++                }
++            }
++
++            if (count > 0)
++            {
++                result.Add(domainRule);
++                hasSpecificCriteria = true;
++            }
++        }
++
++        if (item.Ip?.Count > 0)
++        {
++            var ipRule = JsonUtils.DeepCopy(rule) ?? new Rule4Sbox();
++            var count = 0;
++            var negativeIpList = item.Ip
++                .Where(t => t.IsNotEmpty() && t!.TrimStart().StartsWith('!'))
++                .ToList();
++
++            if (negativeIpList.Count > 0)
++            {
++                var positiveIpList = item.Ip.Except(negativeIpList).ToList();
++                var positiveRule = JsonUtils.DeepCopy(ipRule) ?? new Rule4Sbox();
++                positiveRule.outbound = null;
++                positiveRule.action = null;
++                foreach (var address in positiveIpList)
++                {
++                    if (ParseSingboxAddress(address, positiveRule, ruleName, warnings))
++                    {
++                        count++;
++                    }
++                }
++
++                var negativeRule = new Rule4Sbox();
++                foreach (var address in negativeIpList)
++                {
++                    var normalizedAddress = address.TrimStart()[1..].Trim();
++                    if (ParseSingboxAddress(normalizedAddress, negativeRule, ruleName, warnings))
++                    {
++                        count++;
++                    }
++                }
++
++                negativeRule.invert = true;
++                ipRule = new Rule4Sbox
++                {
++                    outbound = ipRule.outbound,
++                    action = ipRule.action,
++                    type = "logical",
++                    mode = "or",
++                    rules = []
++                };
++                if (HasSingboxCriteria(positiveRule))
++                {
++                    ipRule.rules.Add(positiveRule);
++                }
++                if (HasSingboxCriteria(negativeRule))
++                {
++                    ipRule.rules.Add(negativeRule);
++                }
++            }
++            else
++            {
++                foreach (var address in item.Ip)
++                {
++                    if (ParseSingboxAddress(address, ipRule, ruleName, warnings))
++                    {
++                        count++;
++                    }
++                }
++            }
++
++            if (count > 0)
++            {
++                result.Add(ipRule);
++                hasSpecificCriteria = true;
++            }
++        }
++
++        if (item.Process?.Count > 0)
++        {
++            var processNameRule = JsonUtils.DeepCopy(rule) ?? new Rule4Sbox();
++            processNameRule.process_name ??= [];
++            var processPathRule = JsonUtils.DeepCopy(rule) ?? new Rule4Sbox();
++            processPathRule.process_path ??= [];
++
++            foreach (var process in item.Process.Select(t => t?.Trim()).Where(t => t.IsNotEmpty()))
++            {
++                if (process is "self/" or "xray/")
++                {
++                    processNameRule.process_name.Add(Utils.GetExeName("sing-box"));
++                    continue;
++                }
++
++                if (process!.Contains('/') || process.Contains('\\'))
++                {
++                    processPathRule.process_path.Add(process);
++                    continue;
++                }
++
++                processNameRule.process_name.Add(Utils.GetExeName(process));
++            }
++
++            if (processNameRule.process_name.Count > 0)
++            {
++                result.Add(processNameRule);
++                hasSpecificCriteria = true;
++            }
++
++            if (processPathRule.process_path.Count > 0)
++            {
++                result.Add(processPathRule);
++                hasSpecificCriteria = true;
++            }
++        }
++
++        if (!hasSpecificCriteria && HasSingboxCriteria(rule))
++        {
++            result.Add(rule);
++        }
++
++        return result;
++    }
++
++    private static void FillKaringBaseConditions(RulesItem item, KaringCustomRule rule, string ruleName, List<string> warnings)
++    {
++        if (item.Port.IsNotEmpty())
++        {
++            foreach (var port in SplitRoutingValues(item.Port))
++            {
++                if (port.Contains('-'))
++                {
++                    rule.PortRange ??= [];
++                    rule.PortRange.Add(port.Replace("-", ":"));
++                    continue;
++                }
++
++                if (int.TryParse(port, out var numericPort))
++                {
++                    rule.Port ??= [];
++                    rule.Port.Add(numericPort);
++                    continue;
++                }
++
++                warnings.Add($"Rule `{ruleName}` has an invalid port value `{port}` and it was skipped.");
++            }
++        }
++
++        var networks = SplitRoutingValues(item.Network);
++        if (networks.Count > 0)
++        {
++            rule.Network = networks;
++        }
++
++        if (item.Protocol?.Count > 0)
++        {
++            rule.Protocol = item.Protocol
++                .Select(t => t?.Trim())
++                .Where(t => t.IsNotEmpty())
++                .ToList()!;
++        }
++    }
++
++    private static void FillSingboxBaseConditions(RulesItem item, Rule4Sbox rule, string ruleName, List<string> warnings)
++    {
++        if (item.Port.IsNotEmpty())
++        {
++            var portRanges = new List<string>();
++            var ports = new List<int>();
++            foreach (var port in SplitRoutingValues(item.Port))
++            {
++                if (port.Contains('-'))
++                {
++                    portRanges.Add(port.Replace("-", ":"));
++                    continue;
++                }
++
++                if (int.TryParse(port, out var numericPort))
++                {
++                    ports.Add(numericPort);
++                    continue;
++                }
++
++                warnings.Add($"Rule `{ruleName}` has an invalid port value `{port}` and it was skipped.");
++            }
++
++            rule.port_range = portRanges.Count > 0 ? portRanges : null;
++            rule.port = ports.Count > 0 ? ports : null;
++        }
++
++        var networks = SplitRoutingValues(item.Network);
++        if (networks.Count > 0)
++        {
++            rule.network = networks;
++        }
++
++        if (item.Protocol?.Count > 0)
++        {
++            rule.protocol = item.Protocol
++                .Select(t => t?.Trim())
++                .Where(t => t.IsNotEmpty())
++                .ToList()!;
++        }
++
++        if (item.InboundTag?.Count > 0)
++        {
++            rule.inbound = item.InboundTag
++                .Select(t => t?.Trim())
++                .Where(t => t.IsNotEmpty())
++                .ToList()!;
++        }
++    }
++
++    private static bool ParseKaringDomain(string? domain, KaringCustomRule rule, string ruleName, List<string> warnings)
++    {
++        domain = CleanRuleToken(domain);
++        if (domain.IsNullOrEmpty() || domain!.StartsWith('#'))
++        {
++            return false;
++        }
++
++        if (StartsWith(domain, "ext:") || StartsWith(domain, "ext-domain:"))
++        {
++            warnings.Add($"Rule `{ruleName}` contains external domain list `{domain}`, which is not embedded in the Karing export.");
++            return false;
++        }
++
++        if (StartsWith(domain, Global.GeoSitePrefix))
++        {
++            rule.RuleSetBuildIn ??= [];
++            rule.RuleSetBuildIn.Add(domain);
++        }
++        else if (StartsWith(domain, "regexp:"))
++        {
++            rule.DomainRegex ??= [];
++            rule.DomainRegex.Add(domain["regexp:".Length..]);
++        }
++        else if (StartsWith(domain, "domain:"))
++        {
++            rule.DomainSuffix ??= [];
++            rule.DomainSuffix.Add(domain["domain:".Length..]);
++        }
++        else if (StartsWith(domain, "full:"))
++        {
++            rule.Domain ??= [];
++            rule.Domain.Add(domain["full:".Length..]);
++        }
++        else if (StartsWith(domain, "keyword:"))
++        {
++            rule.DomainKeyword ??= [];
++            rule.DomainKeyword.Add(domain["keyword:".Length..]);
++        }
++        else if (StartsWith(domain, "dotless:"))
++        {
++            rule.DomainKeyword ??= [];
++            rule.DomainKeyword.Add(domain["dotless:".Length..]);
++        }
++        else
++        {
++            rule.DomainKeyword ??= [];
++            rule.DomainKeyword.Add(domain);
++        }
++
++        return true;
++    }
++
++    private static bool ParseKaringAddress(string? address, KaringCustomRule rule, string ruleName, List<string> warnings)
++    {
++        address = CleanRuleToken(address);
++        if (address.IsNullOrEmpty())
++        {
++            return false;
++        }
++
++        if (address!.StartsWith('!'))
++        {
++            warnings.Add($"Rule `{ruleName}` contains negative IP match `{address}`, which is not exported to Karing custom diversion rules.");
++            return false;
++        }
++
++        if (StartsWith(address, "ext:") || StartsWith(address, "ext-ip:"))
++        {
++            warnings.Add($"Rule `{ruleName}` contains external IP list `{address}`, which is not embedded in the Karing export.");
++            return false;
++        }
++
++        if (StartsWith(address, Global.GeoIPPrefix))
++        {
++            rule.RuleSetBuildIn ??= [];
++            rule.RuleSetBuildIn.Add(address);
++        }
++        else
++        {
++            rule.IpCidr ??= [];
++            rule.IpCidr.Add(EnsureCidr(address));
++        }
++
++        return true;
++    }
++
++    private static bool ParseSingboxDomain(string? domain, Rule4Sbox rule, string ruleName, List<string> warnings)
++    {
++        domain = CleanRuleToken(domain);
++        if (domain.IsNullOrEmpty() || domain!.StartsWith('#'))
++        {
++            return false;
++        }
++
++        if (StartsWith(domain, "ext:") || StartsWith(domain, "ext-domain:"))
++        {
++            warnings.Add($"Rule `{ruleName}` contains external domain list `{domain}`, which is not embedded in the sing-box route export.");
++            return false;
++        }
++
++        if (StartsWith(domain, Global.GeoSitePrefix))
++        {
++            rule.geosite ??= [];
++            rule.geosite.Add(domain[Global.GeoSitePrefix.Length..]);
++        }
++        else if (StartsWith(domain, "regexp:"))
++        {
++            rule.domain_regex ??= [];
++            rule.domain_regex.Add(domain["regexp:".Length..]);
++        }
++        else if (StartsWith(domain, "domain:"))
++        {
++            rule.domain_suffix ??= [];
++            rule.domain_suffix.Add(domain["domain:".Length..]);
++        }
++        else if (StartsWith(domain, "full:"))
++        {
++            rule.domain ??= [];
++            rule.domain.Add(domain["full:".Length..]);
++        }
++        else if (StartsWith(domain, "keyword:"))
++        {
++            rule.domain_keyword ??= [];
++            rule.domain_keyword.Add(domain["keyword:".Length..]);
++        }
++        else if (StartsWith(domain, "dotless:"))
++        {
++            rule.domain_keyword ??= [];
++            rule.domain_keyword.Add(domain["dotless:".Length..]);
++        }
++        else
++        {
++            rule.domain_keyword ??= [];
++            rule.domain_keyword.Add(domain);
++        }
++
++        return true;
++    }
++
++    private static bool ParseSingboxAddress(string? address, Rule4Sbox rule, string ruleName, List<string> warnings)
++    {
++        address = CleanRuleToken(address);
++        if (address.IsNullOrEmpty())
++        {
++            return false;
++        }
++
++        if (StartsWith(address!, "ext:") || StartsWith(address!, "ext-ip:"))
++        {
++            warnings.Add($"Rule `{ruleName}` contains external IP list `{address}`, which is not embedded in the sing-box route export.");
++            return false;
++        }
++
++        if (string.Equals(address, $"{Global.GeoIPPrefix}private", StringComparison.OrdinalIgnoreCase))
++        {
++            rule.ip_is_private = true;
++        }
++        else if (StartsWith(address!, Global.GeoIPPrefix))
++        {
++            rule.geoip ??= [];
++            rule.geoip.Add(address![Global.GeoIPPrefix.Length..]);
++        }
++        else
++        {
++            rule.ip_cidr ??= [];
++            rule.ip_cidr.Add(EnsureCidr(address!));
++        }
++
++        return true;
++    }
++
++    private static string MapKaringOutbound(string? outboundTag, string ruleName, List<string> warnings)
++    {
++        outboundTag = outboundTag.IsNotEmpty() ? outboundTag : Global.ProxyTag;
++        if (string.Equals(outboundTag, Global.DirectTag, StringComparison.OrdinalIgnoreCase))
++        {
++            return "direct";
++        }
++
++        if (string.Equals(outboundTag, Global.BlockTag, StringComparison.OrdinalIgnoreCase))
++        {
++            return "block";
++        }
++
++        if (string.Equals(outboundTag, Global.ProxyTag, StringComparison.OrdinalIgnoreCase))
++        {
++            return "currentSelected";
++        }
++
++        warnings.Add($"Rule `{ruleName}` uses outbound `{outboundTag}`; it was exported to Karing as currentSelected.");
++        return "currentSelected";
++    }
++
++    private static string MapSingboxOutbound(string outboundTag, string ruleName, List<string> warnings)
++    {
++        if (Global.OutboundTags.Contains(outboundTag))
++        {
++            return outboundTag;
++        }
++
++        warnings.Add($"Rule `{ruleName}` uses outbound `{outboundTag}`; it was exported to sing-box as proxy.");
++        return Global.ProxyTag;
++    }
++
++    private static bool HasKaringCriteria(KaringCustomRule rule)
++    {
++        return HasItems(rule.RuleSetBuildIn)
++               || HasItems(rule.RuleSet)
++               || HasItems(rule.Package)
++               || HasItems(rule.ProcessName)
++               || HasItems(rule.ProcessPath)
++               || HasItems(rule.ProcessDir)
++               || HasItems(rule.DomainSuffix)
++               || HasItems(rule.Domain)
++               || HasItems(rule.DomainKeyword)
++               || HasItems(rule.DomainRegex)
++               || HasItems(rule.IpCidr)
++               || HasItems(rule.IpVersion)
++               || HasItems(rule.Network)
++               || HasItems(rule.NetworkType)
++               || HasItems(rule.WifiSsid)
++               || HasItems(rule.WifiBssid)
++               || HasItems(rule.Port)
++               || HasItems(rule.PortRange)
++               || HasItems(rule.Protocol);
++    }
++
++    private static bool HasSingboxCriteria(Rule4Sbox rule)
++    {
++        return rule.ip_is_private == true
++               || HasItems(rule.inbound)
++               || HasItems(rule.protocol)
++               || HasItems(rule.network)
++               || HasItems(rule.port)
++               || HasItems(rule.port_range)
++               || HasItems(rule.geosite)
++               || HasItems(rule.domain)
++               || HasItems(rule.domain_suffix)
++               || HasItems(rule.domain_keyword)
++               || HasItems(rule.domain_regex)
++               || HasItems(rule.geoip)
++               || HasItems(rule.ip_cidr)
++               || HasItems(rule.source_ip_cidr)
++               || HasItems(rule.process_name)
++               || HasItems(rule.process_path)
++               || HasItems(rule.rule_set)
++               || HasItems(rule.rules);
++    }
++
++    private static bool HasItems<T>(ICollection<T>? values) => values is { Count: > 0 };
++
++    private static void NormalizeKaringRule(KaringCustomRule rule)
++    {
++        rule.RuleSetBuildIn = NormalizeList(rule.RuleSetBuildIn);
++        rule.RuleSet = NormalizeList(rule.RuleSet);
++        rule.Package = NormalizeList(rule.Package);
++        rule.ProcessName = NormalizeList(rule.ProcessName);
++        rule.ProcessPath = NormalizeList(rule.ProcessPath);
++        rule.ProcessDir = NormalizeList(rule.ProcessDir);
++        rule.DomainSuffix = NormalizeList(rule.DomainSuffix);
++        rule.Domain = NormalizeList(rule.Domain);
++        rule.DomainKeyword = NormalizeList(rule.DomainKeyword);
++        rule.DomainRegex = NormalizeList(rule.DomainRegex);
++        rule.IpCidr = NormalizeList(rule.IpCidr);
++        rule.IpVersion = NormalizeList(rule.IpVersion);
++        rule.Network = NormalizeList(rule.Network);
++        rule.NetworkType = NormalizeList(rule.NetworkType);
++        rule.WifiSsid = NormalizeList(rule.WifiSsid);
++        rule.WifiBssid = NormalizeList(rule.WifiBssid);
++        rule.Port = NormalizeList(rule.Port);
++        rule.PortRange = NormalizeList(rule.PortRange);
++        rule.Protocol = NormalizeList(rule.Protocol);
++    }
++
++    private static List<T>? NormalizeList<T>(List<T>? values)
++    {
++        return values is { Count: > 0 } ? values.Distinct().ToList() : null;
++    }
++
++    private static List<string> SplitRoutingValues(string? value)
++    {
++        if (value.IsNullOrEmpty())
++        {
++            return [];
++        }
++
++        return value!
++            .Replace("\r", string.Empty)
++            .Split([',', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
++            .Where(t => t.IsNotEmpty())
++            .ToList();
++    }
++
++    private static string? CleanRuleToken(string? value)
++    {
++        return value?
++            .Replace(Global.RoutingRuleComma, ",")
++            .Trim();
++    }
++
++    private static bool StartsWith(string value, string prefix)
++    {
++        return value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
++    }
++
++    private static string EnsureCidr(string address)
++    {
++        if (address.Contains('/'))
++        {
++            return address;
++        }
++
++        if (System.Net.IPAddress.TryParse(address, out var ip))
++        {
++            return ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
++                ? $"{address}/128"
++                : $"{address}/32";
++        }
++
++        return address;
++    }
++
++    private static string GetRuleName(RulesItem item, int number)
++    {
++        return item.Remarks.IsNotEmpty() ? item.Remarks! : $"v2rayN rule {number}";
++    }
++
++    private static string SanitizeFileName(string? value)
++    {
++        var name = value.IsNotEmpty() ? value! : "routing";
++        foreach (var invalid in Path.GetInvalidFileNameChars())
++        {
++            name = name.Replace(invalid, '-');
++        }
++
++        name = name.Trim(' ', '.', '-');
++        return name.IsNotEmpty() ? name : "routing";
 +    }
 +
 +    private Task OnSpeedTestUpdate(SpeedTestResult result)
@@ -790,6 +1576,53 @@ index 0000000..3ef2d4f
 +            .Select(t => t.GetString())
 +            .Where(t => t.IsNotEmpty())
 +            .ToList();
++    }
++
++    private sealed class KaringCustomRulesDocument
++    {
++        public List<KaringCustomRule> Rules { get; set; } = [];
++    }
++
++    private sealed class KaringCustomRule
++    {
++        public string Name { get; set; } = string.Empty;
++        public string Outbound { get; set; } = "currentSelected";
++        [JsonPropertyName("switch")]
++        public bool Switch { get; set; } = true;
++        public bool Or { get; set; } = true;
++        [JsonPropertyName("rule_set_build_in")]
++        public List<string>? RuleSetBuildIn { get; set; }
++        [JsonPropertyName("rule_set")]
++        public List<string>? RuleSet { get; set; }
++        public List<string>? Package { get; set; }
++        [JsonPropertyName("process_name")]
++        public List<string>? ProcessName { get; set; }
++        [JsonPropertyName("process_path")]
++        public List<string>? ProcessPath { get; set; }
++        [JsonPropertyName("process_dir")]
++        public List<string>? ProcessDir { get; set; }
++        [JsonPropertyName("domain_suffix")]
++        public List<string>? DomainSuffix { get; set; }
++        public List<string>? Domain { get; set; }
++        [JsonPropertyName("domain_keyword")]
++        public List<string>? DomainKeyword { get; set; }
++        [JsonPropertyName("domain_regex")]
++        public List<string>? DomainRegex { get; set; }
++        [JsonPropertyName("ip_cidr")]
++        public List<string>? IpCidr { get; set; }
++        [JsonPropertyName("ip_version")]
++        public List<string>? IpVersion { get; set; }
++        public List<string>? Network { get; set; }
++        [JsonPropertyName("network_type")]
++        public List<string>? NetworkType { get; set; }
++        [JsonPropertyName("wifi_ssid")]
++        public List<string>? WifiSsid { get; set; }
++        [JsonPropertyName("wifi_bssid")]
++        public List<string>? WifiBssid { get; set; }
++        public List<int>? Port { get; set; }
++        [JsonPropertyName("port_range")]
++        public List<string>? PortRange { get; set; }
++        public List<string>? Protocol { get; set; }
 +    }
 +
 +    private sealed class NodeModel

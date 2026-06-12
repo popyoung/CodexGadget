@@ -23,6 +23,29 @@ Current patches:
 - `0001-add-v2rayn-plugin-host.patch`: plugin interfaces, plugin loader, and plugin reload event wiring.
 - `0002-add-v2rayn-ipc-plugin.patch`: named-pipe IPC plugin used by the Codex hook.
 
+## v2rayN IPC Commands
+
+The v2rayN plugin listens on the `v2rayn-control` named pipe. It supports:
+
+- `ping`
+- `list`
+- `switch`
+- `reload`
+- `test`
+- `test-stop`
+- `test-status`
+- `export-karing`
+
+`export-karing` reads the active v2rayN routing item and writes a Karing custom diversion export. Optional request fields:
+
+- `outputDir`: target directory. If omitted, v2rayN writes under `exports\karing` in its startup directory.
+
+The command writes:
+
+- `diversion_rules_custom.json`: import this in Karing's custom diversion group screen.
+- `v2rayn-singbox-route.json`: sing-box route-shaped fallback/reference export.
+- `v2rayn-routing-raw.json`: raw v2rayN routing metadata and rules.
+
 ## Build
 
 Publish the plugin-capable v2rayN host:
@@ -31,10 +54,10 @@ Publish the plugin-capable v2rayN host:
 dotnet publish v2rayn-control\v2rayN\v2rayN\v2rayN\v2rayN.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -o Z:\codex\codexGadget\v2rayN-win-x64
 ```
 
-Publish the IPC plugin DLL into the host plugin directory:
+Build the IPC plugin DLL. The plugin project copies only `V2rayN.IpcPlugin.dll` into the host plugin directory:
 
 ```powershell
-dotnet publish v2rayn-control\v2rayN\v2rayN\V2rayN.IpcPlugin\V2rayN.IpcPlugin.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -o Z:\codex\codexGadget\v2rayN-win-x64\guiPlugins
+dotnet build v2rayn-control\v2rayN\v2rayN\V2rayN.IpcPlugin\V2rayN.IpcPlugin.csproj -c Release
 ```
 
 Publish the Codex hook:

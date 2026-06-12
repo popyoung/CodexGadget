@@ -7,10 +7,6 @@
     <PublishDir>$(CodexGadgetOutputRoot)\v2rayN-win-x64\</PublishDir>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'V2rayN.IpcPlugin'">
-    <PublishDir>$(CodexGadgetOutputRoot)\v2rayN-win-x64\guiPlugins\</PublishDir>
-  </PropertyGroup>
-
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'V2rayN.Control.Hook'">
     <PublishDir>$(CodexGadgetOutputRoot)\codex-hook\</PublishDir>
   </PropertyGroup>

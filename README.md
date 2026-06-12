@@ -29,7 +29,7 @@ Local publish outputs are fixed under `Z:\codex\codexGadget\...` by `Directory.B
 Default local publish directories:
 
 - `v2rayN`: `Z:\codex\codexGadget\v2rayN-win-x64`
-- `V2rayN.IpcPlugin`: `Z:\codex\codexGadget\v2rayN-win-x64\guiPlugins`
+- `V2rayN.IpcPlugin`: `Z:\codex\codexGadget\v2rayN-win-x64\guiPlugins\V2rayN.IpcPlugin.dll`
 - `V2rayN.Control.Hook`: `Z:\codex\codexGadget\codex-hook`
 - `AutoShutdownHook`: `Z:\codex\codexGadget\auto-shutdown-hook\win-x64`
 
