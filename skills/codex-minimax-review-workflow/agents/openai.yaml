@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex MiniMax Review Workflow"
+  short_description: "Codex and MiniMax review loop"
+  default_prompt: "Use the Codex MiniMax review workflow for this project."

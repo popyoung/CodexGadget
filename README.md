@@ -5,6 +5,7 @@ Local Codex helper plugins and v2rayN control tooling.
 ## Layout
 
 - `shutdown/`: local shutdown helper and Codex hook plugin.
+- `skills/codex-minimax-review-workflow/`: reusable Codex skill for the Codex + MiniMax review workflow.
 - `v2rayn-control/`: Codex `vpn` hook plugin, v2rayN submodule, and v2rayN patch stack.
 - `.agents/plugins/marketplace.json`: local plugin marketplace entries.
 
