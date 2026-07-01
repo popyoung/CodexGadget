@@ -12,7 +12,7 @@ Use this skill when the user wants Codex and MiniMax to collaborate on coding wo
 - Do not silently install anything, switch model/provider/tooling, use direct API fallback, skip verification, or replace a failed path with another path. Ask the user first.
 - Do not let MiniMax make code changes in this workflow. MiniMax reviews only.
 - Do not let the main Codex agent directly patch findings raised by MiniMax. The main agent may clarify, judge, discuss, and write conclusions. Implementation goes to subagent A.
-- Treat blocking and non-blocking MiniMax findings with the same decision loop. Non-blocking findings must not disappear into archives unless the user decides or Codex and MiniMax agree with evidence that no change is needed.
+- Treat blocking and non-blocking MiniMax findings with the same decision loop. Non-blocking findings must not disappear into archives. Codex and MiniMax may close a finding only when they agree, with evidence, that no change is needed for this project. If a finding is valid but not fixed in this delivery, ask the user to approve deferral and record a concrete deadline, trigger, or next-start condition.
 - If user requirements conflict, stop and ask. Do not resolve contradictory requirements silently.
 - If MiniMax feedback is technically stronger than Codex's initial position, accept it. If the same disagreement cannot be resolved after 3 rounds, ask the user to decide.
 - Active communication files are overwritten each turn. Read and then delete consumed active output files so context does not grow.
@@ -52,7 +52,7 @@ For templates and the full file contract, load `references/protocol.md`.
 7. Main Codex agent evaluates every MiniMax finding. Discuss with MiniMax when evidence is missing, wrong, or disputed.
 8. After agreement or user decision, write a final modification conclusion. If code must change, assign subagent A to implement it.
 9. Repeat package generation and MiniMax review after material code changes. There is no separate re-review shortcut; it is the same review step again.
-10. Finish only after local verification passes and all MiniMax findings are either fixed, explicitly rejected with MiniMax agreement, or left for user decision.
+10. Finish only after local verification passes and all MiniMax findings are fixed, closed by Codex and MiniMax agreement that no change is needed, or deferred with explicit user approval plus a recorded deadline, trigger, or next-start condition.
 
 ## ACP Controller
 
@@ -78,6 +78,6 @@ Do not use PowerShell `< nul` syntax for MiniMax git commands.
 - Subagent A made code changes; main agent did not patch MiniMax findings directly.
 - Subagent B produced or updated the review package.
 - MiniMax returned a final response through `minimax-to-codex.md`.
-- Blocking and non-blocking findings were all resolved, deferred to the user, or closed by Codex and MiniMax agreement with evidence.
+- Blocking and non-blocking findings were all resolved, closed by Codex and MiniMax agreement that no change is needed, or explicitly deferred by the user with a recorded deadline, trigger, or next-start condition.
 - Builds/tests/publish checks relevant to the task were run, or the user approved why they were not run.
 - Active communication files were cleaned; durable records are small and intentional.

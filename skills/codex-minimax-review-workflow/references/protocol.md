@@ -142,9 +142,15 @@ Use the same loop for blocking and non-blocking findings:
 2. If the finding is clear and valid, main writes a final conclusion and assigns subagent A.
 3. If the finding is unclear, main asks MiniMax for narrower evidence through `codex-to-minimax.md`.
 4. If Codex disagrees, main sends evidence or counterargument to MiniMax.
-5. If Codex and MiniMax agree no change is needed, record the reason in the decision log.
+5. If Codex and MiniMax agree no change is needed for this project, record the reason in the decision log.
 6. If the same dispute repeats for 3 rounds, ask the user to decide.
 7. If the user decides, record the decision and assign subagent A only if a code change is needed.
+
+Closure and deferral are different decisions:
+
+- Close a finding only when Codex and MiniMax agree that no change is needed, or the user decides no change is needed.
+- Defer a valid finding only after explicit user approval. A deferral must record a deadline, trigger, or next-start condition, such as "before v1.0", "next feature round", "if audio quality complaints occur", or an exact date.
+- If a valid non-blocking finding is not closed and the user has not approved deferral, do not finish by treating it as silently postponed. Either fix it through subagent A or ask the user for the deferral decision.
 
 ## Decision Log Template
 
@@ -161,13 +167,17 @@ Keep unresolved or intentionally deferred findings visible in the final handoff,
 
 - <finding id>: <why no change is needed, evidence>
 
+## Deferred With User Approval
+
+- <finding id>: <user-approved reason for deferral, deadline or trigger, owner/next action>
+
 ## User Decisions
 
 - <finding id>: <user decision, date, resulting action>
 
 ## Still Optional Or Deferred
 
-- <finding id>: <current tradeoff and why it remains visible>
+- <finding id>: <current tradeoff and why it remains visible; this section must not contain valid work that has been silently postponed without user-approved timing or trigger>
 ```
 
 ## Subagent Lifecycle
@@ -186,7 +196,7 @@ Keep unresolved or intentionally deferred findings visible in the final handoff,
 - Focused diff or snippets for changed files.
 - Relevant config files and project files.
 - Build/test/publish commands and result summaries.
-- Known limitations and unresolved user decisions.
+- Known limitations, unresolved user decisions, and user-approved deferral timing or trigger for any valid finding that is not fixed now.
 
 ## Cleanup
 
