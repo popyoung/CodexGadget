@@ -1,6 +1,6 @@
 # Codex MiniMax Review Protocol
 
-This file contains the detailed protocol for the Codex MiniMax review workflow.
+This file contains the detailed protocol where Codex subagent A implements, Codex subagent B prepares factual evidence, and MiniMax reviews independently.
 
 ## Durable MiniMax Constraints Template
 
@@ -13,7 +13,7 @@ You are the MiniMax review worker for this workspace.
 
 ## Role
 
-- Review only. Do not modify files unless Codex explicitly changes this project mode with user approval.
+- Review only. Do not modify product files unless the user explicitly approves a workflow change.
 - Communicate with Codex only through `.minimax-remix/minimax-to-codex.md`, `.minimax-remix/minimax-to-codex.partial.md`, and `.minimax-remix/minimax-heartbeat.json`.
 - Read `.minimax-remix/codex-to-minimax.md` for each task.
 
@@ -54,12 +54,27 @@ Overwrite `.minimax-remix/codex-to-minimax.md` for each MiniMax turn:
 
 ## Hard Constraints
 
-- MiniMax reviews only.
+- MiniMax reviews only and does not modify product code.
 - No silent installs.
 - No silent fallback.
-- Findings, including non-blocking findings, must remain visible until resolved by agreement or user decision.
+- Findings, including non-blocking findings, remain visible until resolved by agreement or user decision.
+- Treat this package as a bounded starting point, not a sealed boundary. Inspect additional workspace files when needed and request missing evidence explicitly.
 
-## Review Package
+## Review Package Prepared By Codex Subagent B
+
+Subagent B supplies facts, not conclusions. It must not omit evidence because it appears unimportant or make a preliminary quality judgment.
+
+### Requirements And Clarifications
+
+```text
+<complete current requirements, preserving user wording where practical>
+```
+
+### Constraints And Decisions
+
+```text
+<hard constraints, unresolved decisions, and user-approved deferrals>
+```
 
 ### Git State
 
@@ -70,27 +85,35 @@ Overwrite `.minimax-remix/codex-to-minimax.md` for each MiniMax turn:
 ### Diff Summary
 
 ```diff
-<bounded relevant diff>
+<bounded raw relevant diff>
 ```
 
 ### Relevant Files
 
 ```text
-<paths and focused snippets, not the entire repo>
+<paths and focused context needed to understand the changed behavior>
 ```
 
-### Verification
+### Verification Evidence
 
 ```text
-<commands run and output summary>
+<commands run, exact result summaries, warnings, failures, and unrun checks>
+```
+
+### Implementation Report
+
+```text
+<subagent A changed files, design notes, known uncertainty, and limitations>
 ```
 
 ## Questions For MiniMax
 
-1. Identify blocking correctness, build, runtime, data-loss, security, or requirement gaps.
-2. Identify non-blocking UX, maintainability, or documentation findings that should be left for user decision if not fixed.
-3. Provide evidence for each finding.
-4. If you disagree with Codex's prior judgment, explain the disagreement narrowly.
+1. Check whether the package is sufficient and internally consistent. Request missing evidence instead of assuming.
+2. Identify blocking correctness, build, runtime, data-loss, security, or requirement gaps.
+3. Identify non-blocking UX, maintainability, performance, test, or documentation findings.
+4. Provide concrete evidence for every finding.
+5. Inspect additional workspace files when they materially affect confidence.
+6. If you disagree with Codex's prior judgment, explain the disagreement narrowly with evidence.
 ```
 
 ## MiniMax Final Response Contract
@@ -100,20 +123,23 @@ MiniMax writes `.minimax-remix/minimax-to-codex.md`:
 ```markdown
 # MiniMax Final Response
 
-status: approved | changes_requested | blocked
+status: approved | changes_requested | blocked | needs_evidence
+
+## Package Sufficiency
+
+- sufficient: yes | no
+- missing evidence: <items or none>
 
 ## Blocking Findings
 
 - id: MM-BLOCK-001
-  severity: blocking
   file: <path or n/a>
   evidence: <line, behavior, command, or reasoning>
   recommendation: <specific change or decision>
 
-## Non-Blocking Findings For User Decision
+## Non-Blocking Findings
 
 - id: MM-NB-001
-  severity: non-blocking
   evidence: <why this matters>
   recommendation: <possible change>
   can_ship_without_fix: yes | no | uncertain
@@ -131,20 +157,21 @@ status: approved | changes_requested | blocked
 
 ## Final Recommendation
 
-<Ship, fix listed items, ask user, or provide missing evidence.>
+<Approve, fix listed items, ask user, or provide missing evidence.>
 ```
 
 ## Finding Decision Loop
 
-Use the same loop for blocking and non-blocking findings:
+Use the same loop for blocking and non-blocking MiniMax findings:
 
 1. Main Codex agent reads MiniMax final output and deletes the active final file.
-2. If the finding is clear and valid, main writes a final conclusion and assigns subagent A.
-3. If the finding is unclear, main asks MiniMax for narrower evidence through `codex-to-minimax.md`.
-4. If Codex disagrees, main sends evidence or counterargument to MiniMax.
-5. If Codex and MiniMax agree no change is needed for this project, record the reason in the decision log.
-6. If the same dispute repeats for 3 rounds, ask the user to decide.
-7. If the user decides, record the decision and assign subagent A only if a code change is needed.
+2. If MiniMax needs evidence, main assigns subagent B to update the package, checks it, and sends it back to the same MiniMax session.
+3. If a finding is clear and valid, main writes a final conclusion and assigns subagent A.
+4. If a finding is unclear, main requests narrower evidence from MiniMax or inspects the cited source.
+5. If Codex disagrees, main sends evidence or a counterargument to MiniMax.
+6. If Codex and MiniMax agree no change is needed for this project, record the reason in the decision log.
+7. If the same dispute repeats for 3 rounds, ask the user to decide.
+8. If the user decides, record the decision and assign subagent A only if a code change is needed.
 
 Closure and deferral are different decisions:
 
@@ -161,7 +188,7 @@ Keep unresolved or intentionally deferred findings visible in the final handoff,
 
 ## Fixed
 
-- <finding id>: <what changed, commit or file reference, verification>
+- <finding id>: <what subagent A changed, commit or file reference, verification>
 
 ## Closed By Codex And MiniMax Agreement
 
@@ -186,9 +213,11 @@ Keep unresolved or intentionally deferred findings visible in the final handoff,
 - Reuse them until their work is complete, they explicitly finish, or they are blocked.
 - Do not spawn replacement subagents silently to hide context loss.
 - If a subagent is unavailable or the tool cannot provide persistent communication, report that limitation and ask before changing the workflow.
-- The main agent may inspect files and run verification. It must not directly edit product code to resolve MiniMax findings.
+- The main agent may inspect files and run verification. It must not directly edit product code to resolve MiniMax findings unless the user explicitly changes the workflow.
 
-## Review Package Checklist
+## Codex Subagent B Review Package Contract
+
+Subagent B always generates or updates the package before MiniMax review. The package is an evidence index that saves MiniMax tokens; it is not a substitute for MiniMax's independent judgment.
 
 - User requirements and latest clarifications.
 - Explicit constraints, including no silent install and no silent fallback.
@@ -197,6 +226,9 @@ Keep unresolved or intentionally deferred findings visible in the final handoff,
 - Relevant config files and project files.
 - Build/test/publish commands and result summaries.
 - Known limitations, unresolved user decisions, and user-approved deferral timing or trigger for any valid finding that is not fixed now.
+- Subagent A implementation report and any uncertainty.
+
+Subagent B must preserve contradictory or suspicious evidence instead of resolving it. MiniMax may inspect any relevant workspace file and may return `needs_evidence`; subagent B then supplements the package rather than MiniMax rebuilding the entire context itself.
 
 ## Cleanup
 
