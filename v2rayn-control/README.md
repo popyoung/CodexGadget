@@ -5,7 +5,7 @@ This directory contains the Codex `vpn` hook plugin and the v2rayN IPC integrati
 ## Layout
 
 - `codex-plugin/`: Codex `UserPromptSubmit` hook plugin source.
-- `v2rayN/`: upstream v2rayN git submodule, currently pinned to v2rayN 7.21.3.
+- `v2rayN/`: upstream v2rayN git submodule, currently pinned to v2rayN 7.23.3.
 - `patches/`: local v2rayN changes, stored as git patches.
 - `artifacts/`: ignored local build outputs from older/manual runs.
 - `tmp-v2rayn-test/`: ignored local v2rayN test data.
@@ -47,6 +47,8 @@ The command writes:
 - `v2rayn-routing-raw.json`: raw v2rayN routing metadata and rules.
 
 ## Build
+
+v2rayN 7.23.3 and the Codex hook require the .NET 10 SDK.
 
 Publish the plugin-capable v2rayN host:
 

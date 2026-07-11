@@ -1,8 +1,8 @@
 diff --git a/v2rayN/ServiceLib/Events/AppEvents.cs b/v2rayN/ServiceLib/Events/AppEvents.cs
-index 5824bfc..9ff7283 100644
+index 2f97bc6..85ceabb 100644
 --- a/v2rayN/ServiceLib/Events/AppEvents.cs
 +++ b/v2rayN/ServiceLib/Events/AppEvents.cs
-@@ -11,6 +11,7 @@ public static class AppEvents
+@@ -12,6 +12,7 @@ public static class AppEvents
      public static readonly EventChannel<Unit> ProfilesRefreshRequested = new();
      public static readonly EventChannel<Unit> SubscriptionsRefreshRequested = new();
      public static readonly EventChannel<Unit> ProxiesReloadRequested = new();
@@ -11,13 +11,13 @@ index 5824bfc..9ff7283 100644
  
      public static readonly EventChannel<string> SendSnackMsgRequested = new();
 diff --git a/v2rayN/ServiceLib/GlobalUsings.cs b/v2rayN/ServiceLib/GlobalUsings.cs
-index 4553cbc..2d66308 100644
+index 6e051d8..774385f 100644
 --- a/v2rayN/ServiceLib/GlobalUsings.cs
 +++ b/v2rayN/ServiceLib/GlobalUsings.cs
-@@ -30,6 +30,7 @@ global using ServiceLib.Handler.SysProxy;
- global using ServiceLib.Helper;
- global using ServiceLib.Manager;
- global using ServiceLib.Models;
+@@ -34,6 +34,7 @@ global using ServiceLib.Models.CoreConfigs;
+ global using ServiceLib.Models.Configs;
+ global using ServiceLib.Models.Dto;
+ global using ServiceLib.Models.Entities;
 +global using ServiceLib.Plugins;
  global using ServiceLib.Resx;
  global using ServiceLib.Services;
@@ -281,10 +281,10 @@ index 0000000..1387a63
 +    }
 +}
 diff --git a/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs b/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs
-index 53ad06c..beef344 100644
+index 66ffd05..2bd6184 100644
 --- a/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs
 +++ b/v2rayN/ServiceLib/ViewModels/MainWindowViewModel.cs
-@@ -236,6 +236,10 @@ public class MainWindowViewModel : MyReactiveObject
+@@ -238,6 +238,10 @@ public class MainWindowViewModel : MyReactiveObject
              .ObserveOn(RxSchedulers.MainThreadScheduler)
              .Subscribe(async _ => await Reload());
  
@@ -295,15 +295,15 @@ index 53ad06c..beef344 100644
          AppEvents.AddServerViaScanRequested
              .AsObservable()
              .ObserveOn(RxSchedulers.MainThreadScheduler)
-@@ -265,6 +269,7 @@ public class MainWindowViewModel : MyReactiveObject
-         await ConfigHandler.InitBuiltinFullConfigTemplate(_config);
+@@ -273,6 +277,7 @@ public class MainWindowViewModel : MyReactiveObject
          await ProfileExManager.Instance.Init();
          await CoreManager.Instance.Init(_config, UpdateHandler);
+         await CertPemManager.Instance.Init(_config);
 +        QueuePluginReload();
          TaskManager.Instance.RegUpdateTask(_config, UpdateTaskHandler);
  
          if (_config.GuiItem.EnableStatistics || _config.GuiItem.DisplayRealTimeSpeed)
-@@ -308,6 +313,21 @@ public class MainWindowViewModel : MyReactiveObject
+@@ -328,6 +333,21 @@ public class MainWindowViewModel : MyReactiveObject
          }
      }
  

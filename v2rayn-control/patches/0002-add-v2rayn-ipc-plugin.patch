@@ -1,6 +1,6 @@
 diff --git a/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj b/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj
 new file mode 100644
-index 0000000..8b9810c
+index 0000000..be1beac
 --- /dev/null
 +++ b/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj
 @@ -0,0 +1,25 @@
@@ -8,7 +8,7 @@ index 0000000..8b9810c
 +
 +	<PropertyGroup>
 +		<OutputType>Library</OutputType>
-+		<TargetFramework>net8.0-windows</TargetFramework>
++		<TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
 +		<UseWPF>true</UseWPF>
 +		<CodexGadgetOutputRoot Condition="'$(CodexGadgetOutputRoot)' == ''">Z:\codex\codexGadget</CodexGadgetOutputRoot>
 +		<V2rayNIpcPluginOutputDir>$(CodexGadgetOutputRoot)\v2rayN-win-x64\guiPlugins\</V2rayNIpcPluginOutputDir>
@@ -31,10 +31,10 @@ index 0000000..8b9810c
 +</Project>
 diff --git a/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
 new file mode 100644
-index 0000000..3ae10fa
+index 0000000..760c084
 --- /dev/null
 +++ b/v2rayN/V2rayN.IpcPlugin/V2rayNIpcPlugin.cs
-@@ -0,0 +1,1606 @@
+@@ -0,0 +1,1609 @@
 +using System.Collections.Concurrent;
 +using System.IO;
 +using System.IO.Pipes;
@@ -52,7 +52,10 @@ index 0000000..3ae10fa
 +using ServiceLib.Enums;
 +using ServiceLib.Handler;
 +using ServiceLib.Manager;
-+using ServiceLib.Models;
++using ServiceLib.Models.Configs;
++using ServiceLib.Models.CoreConfigs;
++using ServiceLib.Models.Dto;
++using ServiceLib.Models.Entities;
 +using ServiceLib.Plugins;
 +using ServiceLib.Resx;
 +using ServiceLib.Services;

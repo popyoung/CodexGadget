@@ -33,7 +33,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: "10.0.x"
 
       - name: Apply v2rayN patches
         run: |
@@ -56,7 +56,7 @@ jobs:
           dotnet build v2rayn-control/v2rayN/v2rayN/V2rayN.IpcPlugin/V2rayN.IpcPlugin.csproj \
             -c Release \
             -p:CodexGadgetCopyIpcPlugin=false
-          cp v2rayn-control/v2rayN/v2rayN/V2rayN.IpcPlugin/bin/Release/net8.0-windows/V2rayN.IpcPlugin.dll \
+          cp v2rayn-control/v2rayN/v2rayN/V2rayN.IpcPlugin/bin/Release/net10.0-windows10.0.19041.0/V2rayN.IpcPlugin.dll \
             artifacts/v2rayN-win-x64/guiPlugins/
 
       - name: Publish Codex hook
