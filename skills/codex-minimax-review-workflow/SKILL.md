@@ -15,6 +15,8 @@ Codex remains the coordinator. Codex subagent A implements and verifies code. Co
 - Treat blocking and non-blocking MiniMax findings with the same decision loop. Non-blocking findings must not disappear into archives. Codex and MiniMax may close a finding only when they agree, with evidence, that no change is needed for this project. If a finding is valid but not fixed in this delivery, ask the user to approve deferral and record a concrete deadline, trigger, or next-start condition.
 - If user requirements conflict, stop and ask. Do not resolve contradictory requirements silently.
 - If MiniMax feedback is technically stronger than Codex's initial position, accept it. If the same disagreement cannot be resolved after 3 rounds, ask the user to decide.
+- For every new assignment to a known persistent subagent A or B, call `resume_agent(existing_id)` before `send_input`. Do not infer that a visible or completed agent was reclaimed merely because `send_input` returns `agent not found`. Resume the same ID first, then retry `send_input`.
+- Spawn a replacement subagent only after `resume_agent(existing_id)` itself confirms `not_found` or an unrecoverable state. Report that evidence and ask the user before replacing the session or changing the execution model.
 - Active communication files are overwritten each turn. Read and then delete consumed active output files so context does not grow.
 
 ## Roles
@@ -45,8 +47,8 @@ For templates and the full file contract, load `references/protocol.md`.
 
 1. Clarify requirements and constraints. Ask the user about contradictions or decisions that affect architecture, installation, data loss, security, or fallback behavior.
 2. Prepare `.minimax-remix/AGENTS.md` and the fixed communication files. Keep `AGENTS.md` durable and overwrite active turn files.
-3. Assign or reuse subagent A to implement and verify. Do not spawn replacements silently when the existing subagent can continue.
-4. Assign or reuse subagent B to generate the factual review package from the complete requirements, constraints, git state, diff, relevant source, verification output, and unresolved decisions.
+3. Reuse subagent A to implement and verify. When its persistent ID is known, call `resume_agent(existing_id)` first and then `send_input`; do not try `send_input`, misread `agent not found`, and spawn a replacement. If no reusable ID exists, assign one subagent A and retain its ID for later turns.
+4. Reuse subagent B with the same resume-before-send sequence to generate the factual review package from the complete requirements, constraints, git state, diff, relevant source, verification output, and unresolved decisions. If no reusable ID exists, assign one subagent B and retain its ID.
 5. Main Codex agent checks the package for required sections and obvious omissions. Return incomplete packages to subagent B.
 6. Start or reuse the persistent MiniMax ACP session, then send the review package through `codex-to-minimax.md`. MiniMax may inspect additional workspace files instead of treating the package as a sealed boundary.
 7. Wait for MiniMax's final `minimax-to-codex.md`. Use heartbeat and partial files only for stall detection and progress recovery.

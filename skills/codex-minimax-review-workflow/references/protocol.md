@@ -211,8 +211,9 @@ Keep unresolved or intentionally deferred findings visible in the final handoff,
 
 - Prefer one implementation subagent A and one review-package subagent B for a project.
 - Reuse them until their work is complete, they explicitly finish, or they are blocked.
+- Before every new assignment to a known A or B session, call `resume_agent(existing_id)` and only then call `send_input`. A failed `send_input` is not evidence that the session was reclaimed; resume the same ID and retry before considering replacement.
 - Do not spawn replacement subagents silently to hide context loss.
-- If a subagent is unavailable or the tool cannot provide persistent communication, report that limitation and ask before changing the workflow.
+- Only treat a known subagent as unavailable after `resume_agent(existing_id)` explicitly returns `not_found` or an unrecoverable state. Report that evidence and ask before spawning a replacement or changing the workflow.
 - The main agent may inspect files and run verification. It must not directly edit product code to resolve MiniMax findings unless the user explicitly changes the workflow.
 
 ## Codex Subagent B Review Package Contract
